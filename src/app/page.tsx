@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { db } from "~/server/db";
 
 const mockUrls = [
   "https://3pooft8s3y.ufs.sh/f/D1wyDGzKuE9V7OiAkFMPgCapiVuEbOJmjlNIGc3KyQdWMsv1",
@@ -12,7 +13,10 @@ const mockImages = mockUrls.map((url, index) => ({
   url,
 }))
 
-export default function HomePage() {
+export default async function HomePage() {
+
+  const posts = await db.query.posts.findMany();
+
   return (
     <main className="">
       <div className="flex flex-wrap gap-4">{
