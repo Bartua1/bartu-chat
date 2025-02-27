@@ -5,9 +5,9 @@
 
 - [x] Make it deploy (vercel)
 - [x] Scaffold basic ui with mock data
-- [ ] Actually set up a database (vercel postgres)
+- [x] Actually set up a database (vercel postgres)
 - [ ] Attach database to UI
-- [ ] Add authentication (w/ clerk)
+- [x] Add authentication (w/ clerk)
 - [ ] Add chat controls
 - [ ] Error management (w/ Sentry)
 - [ ] Routing/chat page (paralllel route)

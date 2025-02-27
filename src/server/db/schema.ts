@@ -18,11 +18,13 @@ import {
  */
 export const createTable = pgTableCreator((name) => `bartu-chat_${name}`);
 
-export const posts = createTable(
-  "post",
+export const chats = createTable(
+  "chat",
   {
     id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
-    name: varchar("name", { length: 256 }),
+    name: varchar("name", { length: 256 }).notNull(),
+    user_id: integer("user_id").notNull(),
+    url: varchar("url", { length: 1024 }).notNull(),
     createdAt: timestamp("created_at", { withTimezone: true })
       .default(sql`CURRENT_TIMESTAMP`)
       .notNull(),
@@ -31,6 +33,25 @@ export const posts = createTable(
     ),
   },
   (example) => ({
-    nameIndex: index("name_idx").on(example.name),
+    userIdIndex: index("user_id_idx").on(example.user_id),
   })
 );
+
+export const messages = createTable(
+  "message",
+  {
+    id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+    chat_id: integer("chat_id").notNull(),
+    user_id: integer("user_id").notNull(),
+    content: varchar("content", { length: 2048 }).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .default(sql`CURRENT_TIMESTAMP`)
+      .notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).$onUpdate(
+      () => new Date()
+    ),
+  },
+  (example) => ({
+    chatIdIndex: index("chat_id_idx").on(example.chat_id),
+  })
+)
