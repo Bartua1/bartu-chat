@@ -1,3 +1,9 @@
+# Versión funcional
+
+[Vercel Deployment](https://bartu-chat-79ksivs9l-bartua1s-projects.vercel.app/)
+
+Lo normal es que tengamos error de conexión, que significa que no tengo LM Studio abierto en mi pc, prueba más tarde.
+
 # Instalación
 
 1.  Clona el repositorio:
