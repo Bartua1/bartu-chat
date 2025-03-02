@@ -7,6 +7,7 @@ import {
   integer,
   pgTableCreator,
   timestamp,
+  text,
   varchar,
 } from "drizzle-orm/pg-core";
 /**
@@ -42,7 +43,7 @@ export const messages = createTable(
     id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
     chatId: integer("chat_id").notNull(),
     userId: varchar("userId", { length: 256 }).notNull(),
-    content: varchar("content", { length: 2048 }).notNull(),
+    content: text("content").notNull(),
     model: varchar("model", { length: 256 }).notNull(),
     sender: varchar("sender", { length: 256 }).notNull(),
     createdAt: timestamp("created_at", { withTimezone: true })

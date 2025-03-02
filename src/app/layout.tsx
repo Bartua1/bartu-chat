@@ -12,6 +12,7 @@ import { TopNav } from "./_components/topnav";
 import { SideNav } from "./_components/sidenav";
 import { useMediaQuery } from 'usehooks-ts'; // Import the hook
 import { LayoutContent } from "./_components/layout-content";
+import { ChatProvider } from "./_components/chat-context";
 
 const inter = Inter({
   subsets: ["latin"],
@@ -30,11 +31,13 @@ export default function RootLayout({
 
   return (
     <ClerkProvider>
-      <html lang="en" className={`${GeistSans.variable}`}>
-        <body>
-          <LayoutContent>{children}</LayoutContent>
-        </body>
-      </html>
+      <ChatProvider>
+        <html lang="en" className={`${GeistSans.variable}`}>
+          <body>
+            <LayoutContent>{children}</LayoutContent>
+          </body>
+        </html>
+      </ChatProvider>
     </ClerkProvider>
   );
 }

@@ -5,6 +5,7 @@ import { SignedIn, SignedOut } from "@clerk/nextjs";
 import { CustomSignIn } from "./sign-in";
 import { TopNav } from "./topnav";
 import { SideNav } from "./sidenav";
+import { SidebarProvider, SidebarInset } from "~/components/ui/sidebar";
 
 export function LayoutContent({ children }: { children: React.ReactNode }) {
   const isMobile = useMediaQuery('(max-width: 768px)');
@@ -20,11 +21,13 @@ export function LayoutContent({ children }: { children: React.ReactNode }) {
             </div>
           </>
         ) : (
-          <div className="grid grid-cols-5">
-            <SideNav />
-            <div className="col-span-4">
-              {children}
-            </div>
+          <div>
+            <SidebarProvider>
+              <SideNav />
+              <SidebarInset>
+                {children}
+              </SidebarInset>
+            </SidebarProvider>
           </div>
         )}
       </SignedIn>

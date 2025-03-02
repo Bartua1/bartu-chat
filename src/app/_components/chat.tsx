@@ -1,47 +1,110 @@
-"use client";
+'use client';
 // ChatComponent.jsx
 import { useState, useEffect, useRef } from 'react';
-import { FaFileUpload, FaPlay } from 'react-icons/fa'; // Import file upload and run icons
+import { FaFileUpload, FaPlay, FaImage } from 'react-icons/fa'; // Import file upload and run icons
 import { IoAddCircleSharp } from "react-icons/io5";
 import { OpenAI } from 'openai';
-import { useAuth } from '@clerk/nextjs';
-import { env } from "../../env.js";
+import { useAuth, useUser } from '@clerk/nextjs';
+import { useParams } from 'next/navigation';
+import {
+  Card,
+  CardContent,
+  CardHeader,
+  CardTitle,
+} from "~/components/ui/card"
+import { Input } from "~/components/ui/input"
+import { Button } from "~/components/ui/button"
+import { Label } from "~/components/ui/label"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "~/components/ui/select"
+import { Textarea } from "~/components/ui/textarea"
+import { ScrollArea } from "~/components/ui/scroll-area"
+import { Badge } from "~/components/ui/badge"
+import { Skeleton } from "~/components/ui/skeleton"
+import { useToast } from "~/hooks/use-toast"
+import { toast } from "sonner"
+
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "~/components/ui/collapsible"
+
+import {
+  Command,
+  CommandEmpty,
+  CommandGroup,
+  CommandInput,
+  CommandItem,
+  CommandList,
+  CommandSeparator,
+} from "~/components/ui/command"
+
+import { Popover, PopoverContent, PopoverTrigger } from "~/components/ui/popover"
+import { Check, ChevronsUpDown } from "lucide-react"
+import { useChat } from './chat-context'
+
+
+interface Model {
+  id: string;
+  object: string;
+  created: number;
+  owned_by: string;
+}
+
+interface StyleOption {
+  value: string;
+  label: string;
+  description: string;
+}
+interface Message {
+  role: 'system' | 'user' | 'assistant';
+  content: string;
+  partial?: boolean;
+  tokensPerSecond?: number;
+  thinking?: string | null; // Added thinking to the Message interface
+}
 
 export function ChatComponent() {
+  const { user, isLoaded } = useUser();
   const { userId } = useAuth();
+  const params = useParams();
+  const chatUrlFromParams = params.chatUrl;
   const [newChat, setNewChat] = useState(true);
-  const [chatName, setChatName] = useState<string | null>(null);
-  const [chatUrl, setChatUrl] = useState<string | null>(null);
-  const [systemInstructionsCollapsed, setSystemInstructionsCollapsed] = useState(true);
+  const [chatName, setChatName] = useState(null);
+  const [chatId, setChatId] = useState(null);
+  const [open, setOpen] = useState(false)
   const [message, setMessage] = useState('');
-
-  interface Message {
-    role: 'system' | 'user' | 'assistant';
-    content: string;
-    partial?: boolean;
-    tokensPerSecond?: number;
-  }
-
-  interface Model {
-    id: string;
-    object: string;
-    created: number;
-    owned_by: string;
-  }
-
-  const [messages, setMessages] = useState<Message[]>([{ "role": "system", "content": "You are a helpful assistant." }]); // To store the conversation history, include the system prompt
-  const [client, setClient] = useState<OpenAI | null>(null); // Define the client state
+  const [messages, setMessages] = useState<Message[]>([]); // Initialize as empty array
+  const [client, setClient] = useState(null);
   const [models, setModels] = useState<Model[]>([]);
-  const [selectedModel, setSelectedModel] = useState<string>('');
+  const [selectedModel, setSelectedModel] = useState('');
   const [loadingModels, setLoadingModels] = useState(true);
-  const [modelError, setModelError] = useState<string | null>(null);
+  const [modelError, setModelError] = useState(null);
   const [loadingResponse, setLoadingResponse] = useState(false);
-  const [responseError, setResponseError] = useState<string | null>(null);
-  const [tokensPerSecond, setTokensPerSecond] = useState(0); // Add state for tokens per second
-  const [startTime, setStartTime] = useState<number | null>(null);
+  const [responseError, setResponseError] = useState(null);
+  const [tokensPerSecond, setTokensPerSecond] = useState(0);
+  const [startTime, setStartTime] = useState(null);
   const [totalTokens, setTotalTokens] = useState(0);
+  const [systemInstructions, setSystemInstructions] = useState("You are a helpful assistant. Keep your responses concise.");
 
-  const chatContainerRef = useRef<HTMLDivElement>(null); // Ref for the chat container to scroll to bottom
+  const chatContainerRef = useRef<HTMLDivElement>(null);
+  const { toast: useToastHook } = useToast();
+  const { addChat, fetchChats } = useChat(); // Get the addChat function
+
+
+  const styleOptions: StyleOption[] = [
+    { value: "Normal", label: "Normal", description: "Default responses from Claude" },
+    { value: "Concise", label: "Concise", description: "Brief and to-the-point" },
+    { value: "Explanatory", label: "Explanatory", description: "Detailed and informative" },
+    { value: "Formal", label: "Formal", description: "Professional and polite" },
+  ];
+
+  const [selectedStyle, setSelectedStyle] = useState(styleOptions[0].value);
+
+  useEffect(() => {
+    // Initialize the messages with the system instruction
+    setMessages([{ role: 'system', content: systemInstructions }]);
+  }, [systemInstructions]); // Re-run when systemInstructions change
 
   useEffect(() => {
     const fetchOpenAIUrl = async () => {
@@ -75,6 +138,11 @@ export function ChatComponent() {
       } catch (error: unknown) {
         const errorMessage = error instanceof Error ? error.message : "Unknown error";
         console.error("Could not fetch models:", error);
+        useToastHook({
+          title: "Error fetching models",
+          description: errorMessage,
+          variant: "destructive",
+        })
         setModelError(errorMessage);
       } finally {
         setLoadingModels(false);
@@ -84,7 +152,68 @@ export function ChatComponent() {
     void fetchOpenAIUrl();
   }, []);
 
-  // useEffect to scroll to the bottom of the chat container when messages change
+  const extractThinking = (content: string): { thinking: string | null; answer: string } => {
+    const thinkingMatches = [...content.matchAll(/<(think|thought|thinking)>(.*?)<\/(think|thought|thinking)>/gi)];
+    const thinking = thinkingMatches.map(match => match[2] ?? '').join("\n");
+    const answer = content.replace(/<(think|thought|thinking)>.*?<\/(think|thought|thinking)>/gi, '').trim();
+    return { thinking: thinking || null, answer };
+  };
+
+  useEffect(() => {
+    const loadPreviousMessages = async () => {
+      if (chatUrlFromParams) {
+        setLoadingResponse(true);
+        setNewChat(false);
+        if (chatUrlFromParams) {
+          setChatId(chatUrlFromParams);
+          console.log("Loading previous messages for chatId:", chatUrlFromParams);
+          try {
+            const response = await fetch(`/api/chats/${chatUrlFromParams}/messages`);
+            if (!response.ok) {
+              throw new Error(`HTTP error! status: ${response.status}`);
+            }
+            const data = await response.json() as any[];
+
+            const formattedMessages = data.map(msg => {
+              const { thinking, answer } = extractThinking(msg.content);
+              return {
+                role: msg.sender === 'user' ? 'user' : 'assistant',
+                content: answer,
+                thinking: thinking,
+              };
+            });
+
+            // Load previous messages, keeping the system message
+            setMessages([{ role: 'system', content: systemInstructions }, ...formattedMessages]);
+          } catch (error: unknown) {
+            const errorMessage = error instanceof Error ? error.message : "Unknown error";
+            console.error("Failed to load previous messages:", error);
+            useToastHook({
+              title: "Error loading previous messages",
+              description: errorMessage,
+              variant: "destructive",
+            })
+            setResponseError(errorMessage);
+          } finally {
+            setLoadingResponse(false);
+          }
+        } else {
+          console.error("Could not extract chatId from URL:", chatUrlFromParams);
+          useToastHook({
+            title: "Error extracting chatId from URL",
+            description: "Invalid chat URL",
+            variant: "destructive",
+          })
+          setResponseError("Invalid chat URL");
+          setLoadingResponse(false);
+        }
+      }
+    };
+
+    void loadPreviousMessages();
+  }, [chatUrlFromParams, useToastHook, systemInstructions]);
+
+
   useEffect(() => {
     if (chatContainerRef.current) {
       chatContainerRef.current.scrollTop = chatContainerRef.current.scrollHeight;
@@ -93,12 +222,6 @@ export function ChatComponent() {
 
   const uploadMessage = async (chatUrl: string, model: string, userId: string, content: string, sender: string) => {
     try {
-      console.log("Uploading message...");
-      console.log("Chat URL:", chatUrl);
-      console.log("Model:", model);
-      console.log("User ID:", userId);
-      console.log("Content:", content);
-      console.log("Sender:", sender);
       const response = await fetch('/api/uploadmessage', {
         method: 'POST',
         headers: {
@@ -111,45 +234,53 @@ export function ChatComponent() {
         throw new Error(`HTTP error! status: ${response.status}`);
       }
 
-      // Optionally handle response data from the API
       const data = await response.json();
       console.log('Message uploaded successfully:', data);
 
     } catch (error: unknown) {
       const errorMessage = error instanceof Error ? error.message : "Unknown error";
       console.error("Could not upload message:", error);
-      setResponseError(errorMessage); // Or handle the error differently
+      useToastHook({
+        title: "Error uploading message",
+        description: errorMessage,
+        variant: "destructive",
+      })
+      setResponseError(errorMessage);
     }
   };
 
 
   const handleSendMessage = async () => {
     if (message.trim() !== '') {
+      let currentChatId: string | null = chatId; // Capture chatId value immediately
+      let userMessageContent = message;
+
+      if (selectedStyle && selectedStyle !== "Normal") {
+        const styleDescription = styleOptions.find(option => option.value === selectedStyle)?.description || selectedStyle;
+        userMessageContent += `\n\n Please respond in a ${selectedStyle.toLowerCase()} style. (${styleDescription})`;
+      }
+
+      const userMessage: Message = { role: 'user', content: userMessageContent };
+
       try {
-        const userMessage: Message = { role: 'user', content: message };
         setMessages(prevMessages => [...prevMessages, userMessage]);
         setMessage('');
         setLoadingResponse(true);
-  
-        let currentChatUrl: string | null = chatUrl;
-  
-        if (newChat) {
+
+        if (newChat && !chatUrlFromParams) {
           try {
-            // Ask the model for a chat name
             if (!client) {
               throw new Error("OpenAI client is not initialized.");
             }
             const titleResponse = await client.chat.completions.create({
-              model: selectedModel ?? models[0]?.id ?? "gpt-3.5-turbo",
-              messages: [{ role: 'user', content: message }, { role: 'user', content: "Return 6 words that could be the title of this conversion (nothing more)." }],
+              model: selectedModel ?? models[0]?.id ?? "deepseek-coder-v2-lite-instruct",
+              messages: [{ role: 'user', content: message }, { role: 'user', content: "Suggest a concise, 6-word title for this conversation. Return only the title, with no additional explanation or preamble." }],
               max_tokens: 10,
             });
-  
+
             const title = titleResponse.choices[0]?.message?.content ?? `chat - ${new Date().toISOString()}`;
-            console.log("Generated title:", title);
             setChatName(title);
-  
-            // **AWAIT** the response from /api/uploadchat
+
             const response = await fetch('/api/uploadchat', {
               method: 'POST',
               headers: {
@@ -157,246 +288,373 @@ export function ChatComponent() {
               },
               body: JSON.stringify({ name: title, userId: userId }),
             });
-  
+
             if (!response.ok) {
               throw new Error(`HTTP error! status: ${response.status}`);
             }
-  
-            const chat = await response.json() as { url: string };
-            console.log("Chat created successfully:", chat);
-            currentChatUrl = chat[0].url;
-            console.log("Current chat URL:", currentChatUrl);
-            setChatUrl(currentChatUrl); // Store the chat URL
+
+            const chat = await response.json() as { url: string }[];
+            currentChatId = chat[0].url;
+            setChatId(currentChatId);
             setNewChat(false);
-  
+
+            // **Add the new chat to the context:**
+            const newChatObject = {
+              id: Date.now(), // Or get ID from the `chat` response if your API returns it
+              name: title,
+              userId: userId!,
+              url: currentChatId
+            };
+
+            addChat(newChatObject);
+
+
           } catch (error: unknown) {
             const errorMessage = error instanceof Error ? error.message : "Unknown error";
             console.error("Could not create chat:", error);
+            useToastHook({
+              title: "Error creating chat",
+              description: errorMessage,
+              variant: "destructive",
+            })
             setResponseError(errorMessage);
             setLoadingResponse(false);
             return;
           }
+        } else {
+          currentChatId = chatId ?? (typeof chatUrlFromParams === 'string' ? chatUrlFromParams : null); // Directly use chatUrlFromParams
+
+          if (!currentChatId) {
+            console.error("Chat ID is null or undefined.");
+            return;
+          }
         }
-  
+
         setResponseError(null);
         setStartTime(null);
         setTotalTokens(0);
         setTokensPerSecond(0);
-  
-        // Prepare the full messages array for the OpenAI API
-        const messagesForApi = [...messages, userMessage];
-  
-        // Upload the user message
-        if (currentChatUrl) {
-          // **AWAIT** the upload of the message too
-          await uploadMessage(currentChatUrl, selectedModel || models[0]?.id || "gpt-3.5-turbo", userId!, message, 'user');
+
+        // Include system prompt at the start of the messages array
+        const messagesForApi = [{ role: 'system', content: systemInstructions }, ...messages.slice(1), userMessage];
+
+        if (currentChatId) {
+          console.log(`uploadMessage - currentChatId: ${currentChatId}, selectedModel: ${selectedModel ?? models[0]?.id ?? "deepseek-coder-v2-lite-instruct"}, userId: ${userId!}, message: ${message}`);
+          await uploadMessage(currentChatId, selectedModel ?? models[0]?.id ?? "deepseek-coder-v2-lite-instruct", userId!, message, 'user');
+          console.log("uploadMessage call finished for user message"); // Add this line
         } else {
-          console.error("Chat URL is null, cannot upload message.");
+          console.error("Error uploading user message: Chat URL is null. Current Chat URL: ", currentChatId);
         }
-  
-        const response = await client.chat.completions.create({ // Use chat.completions.create
-          model: selectedModel || models[0]?.id || "gpt-3.5-turbo",
-          messages: messagesForApi,  // Send the full conversation history
+
+        const response = await client.chat.completions.create({
+          model: selectedModel ?? models[0]?.id ?? "deepseek-coder-v2-lite-instruct",
+          messages: messagesForApi,
           stream: true,
         });
-  
+
         let fullReply = "";
         let currentTokenCount = 0;
-  
-        setLoadingResponse(true);  // Ensure loading is set at the beginning
-  
-        for await (const chunk of response) { // Iterate over the stream
+        let assistantThinking = null;
+        let tps = 0; // Initialize tps here
+
+        setLoadingResponse(true);
+
+        for await (const chunk of response) {
           if (chunk.choices && chunk.choices[0] && chunk.choices[0].delta && chunk.choices[0].delta.content) {
             const text = chunk.choices[0].delta.content;
             fullReply += text;
-            currentTokenCount += 1; // Increment token count for each chunk processed
+            currentTokenCount += 1;
             setTotalTokens(prevTotalTokens => prevTotalTokens + 1);
-  
-            // Calculate tokens per second
+
             if (startTime) {
-              const elapsedTime = (Date.now() - startTime) / 1000; // in seconds
-              const tps = currentTokenCount / elapsedTime;
+              const elapsedTime = (Date.now() - startTime) / 1000;
+              tps = currentTokenCount / elapsedTime;
               setTokensPerSecond(tps);
-            } else {
-              setStartTime(Date.now()); // Set start time when first token arrives
             }
-  
+
+            const { thinking, answer } = extractThinking(fullReply);
+            assistantThinking = thinking; // Update extracted thinking
             setMessages(prevMessages => {
               const lastMessage = prevMessages.length > 0 ? prevMessages[prevMessages.length - 1] : null;
-              if (lastMessage && lastMessage.role === 'assistant' && lastMessage.partial) { //Use role instead of sender
+              if (lastMessage && lastMessage.role === 'assistant' && lastMessage.partial) {
+                // Update existing partial message
                 return prevMessages.map((msg, index) =>
                   index === prevMessages.length - 1
-                    ? { ...msg, content: fullReply, partial: true, tokensPerSecond: tokensPerSecond } // Just update content
+                    ? { ...msg, content: answer, partial: true, tokensPerSecond: tps, thinking: thinking }
                     : msg
                 );
               } else {
-                const newMessage: Message = { role: 'assistant', content: fullReply, partial: true, tokensPerSecond: tokensPerSecond };
-                return [...prevMessages, newMessage]; // Use role, content
+                // Add new partial message
+                const newMessage: Message = { role: 'assistant', content: answer, partial: true, tokensPerSecond: tps, thinking: thinking };
+                return [...prevMessages, newMessage];
               }
             });
-  
           }
         }
-  
-        // Finalize the message to remove partial flag
-        setMessages(prevMessages =>
-          prevMessages.map(msg => (msg.role === 'assistant' && msg.partial ? { ...msg, partial: false, tokensPerSecond: tokensPerSecond } : msg)) //Use role
-        );
-  
-        // Upload the assistant message
-        if (currentChatUrl) {
-          // Await the upload of the assistant message too
-          await uploadMessage(currentChatUrl, selectedModel || models[0]?.id || "gpt-3.5-turbo", userId!, fullReply, 'assistant');
+
+        // After the loop, update the final message to be non-partial
+        const { thinking: finalThinking, answer: finalAnswer } = extractThinking(fullReply);
+        setMessages(prevMessages => {
+          return prevMessages.map(msg => {
+            if (msg.role === 'assistant' && msg.partial) {
+              return { ...msg, content: finalAnswer, thinking: finalThinking, partial: false, tokensPerSecond: tps };
+            }
+            return msg;
+          });
+        });
+
+        // Upload the full reply *after* the streaming is complete and the state is updated
+        if (currentChatId) {
+          console.log(`uploadMessage - currentChatId: ${currentChatId}, selectedModel: ${selectedModel ?? models[0]?.id ?? "deepseek-coder-v2-lite-instruct"}, userId: ${userId!}, fullReply: ${fullReply}`);
+          await uploadMessage(currentChatId, selectedModel ?? models[0]?.id ?? "deepseek-coder-v2-lite-instruct", userId!, fullReply, 'assistant');
+          console.log("uploadMessage call finished for assistant message");
         } else {
-          console.error("Chat URL is null, cannot upload message.");
+          console.error("Error uploading assistant message: Chat URL is null. Current Chat URL: ", currentChatId);
         }
-  
-  
+
+
       } catch (error: unknown) {
         const errorMessage = error instanceof Error ? error.message : "Unknown error";
         console.error("Could not send message:", error);
+        useToastHook({
+          title: "Error sending message",
+          description: errorMessage,
+          variant: "destructive",
+        })
         setResponseError(errorMessage);
         const errorMessageObj: Message = { role: 'assistant', content: "Error: " + errorMessage };
-        setMessages(prevMessages => [...prevMessages, errorMessageObj]); //Use role
+        setMessages(prevMessages => [...prevMessages, errorMessageObj]);
       } finally {
         setLoadingResponse(false);
         setStartTime(null);
-        // Redirect us to /[chatUrl] if the chat is new
-        if (newChat && chatUrl) {
-          window.location.href = `/${chatUrl}`;
-        }
       }
     }
   };
 
   const handleFileUpload = () => {
-    // Implement file upload logic here (e.g., using a file input element)
     console.log('File upload functionality to be implemented');
+    toast.info("File upload functionality to be implemented")
+  };
+
+  const handleImageUpload = () => {
+    console.log('Image upload functionality to be implemented');
+    toast.info("Image upload functionality to be implemented");
+  };
+
+  const extractChatIdFromUrl = (url: string): string | null => {
+    const parts = url.split('/');
+    if (parts.length > 1 && parts[1] === 'chat') {
+      return parts[2];
+    }
+    return null;
   };
 
   return (
-    <div className="flex flex-col h-screen p-4 bg-slate-50 text-slate-900">
+    <div className="flex flex-col h-screen">
       {/* Top Bar */}
-      <div className="bg-white p-4 border-b border-gray-200">
-        <div className="flex items-center justify-between">
-          <button
-            onClick={() => setSystemInstructionsCollapsed(!systemInstructionsCollapsed)}
-            className="text-blue-500 hover:text-blue-700"
-            title={systemInstructionsCollapsed ? 'Show System Instructions' : 'Hide System Instructions'}
-          >
-            {systemInstructionsCollapsed ? 'Show System Instructions' : 'Hide System Instructions'}
-          </button>
-        </div>
-        {!systemInstructionsCollapsed && (
-          <div className="mt-2 p-2 bg-white rounded border border-gray-300 shadow-sm">
-            <p className="text-sm text-gray-700">
-              These are the system instructions that guide the conversation. You can customize them to influence the bot's behavior.
-              (Example: You are a helpful assistant. Keep your responses concise.)
-            </p>
-          </div>
-        )}
-      </div>
+      <Card className="border-0 shadow-none bg-transparent">
+        <CardHeader className="pb-2 flex flex-row justify-between items-center">
+          <CardTitle>Chat</CardTitle>
 
-      {/* Middle Section (Welcome message or Conversation History) */}
-      <div className="flex-grow p-4 overflow-y-auto bg-slate-50" ref={chatContainerRef}> {/* Added ref here */}
-        {newChat && messages.length === 1 && ( // show only if it's a new chat AND there is only the system message
-          <div className="text-center text-gray-500 align-middle flex items-center justify-center h-full text-2xl">
-            <p>Welcome to Bartu-chat! Start a new conversation by typing a message below.</p>
-          </div>
-        )}
+        </CardHeader>
+        <CardContent className="p-2">
+          <Collapsible className="border-slate-200 border p-4 rounded-md">
+            <CollapsibleTrigger>
+              <Label className='cursor-pointer' htmlFor="systemInstructions">System Instructions</Label>
+            </CollapsibleTrigger>
+            <CollapsibleContent className="p-2">
+              <Textarea
+                id="systemInstructions"
+                className="w-full"
+                placeholder="Optional tone and style instructions for the model"
+                onChange={(e) => setSystemInstructions(e.target.value)}
+              />
+            </CollapsibleContent>
+          </Collapsible>
+        </CardContent>
 
-        {/* Conversation History */}
-        {messages.slice(1).map((msg, index) => { // Skip system message in display
-          const isUser = msg.role === 'user';
-          return (
-            <div key={index} className={`mb-2 ${isUser ? 'text-right' : 'text-left'}`}>
-              <div className={`inline-block p-2 rounded-lg ${isUser ? 'bg-blue-100' : 'bg-gray-100 text-slate-800'}`}>
-                {msg.content}
+      </Card>
 
+      {/* Middle Section (Conversation History) */}
+      <div className="flex-grow">
+        <ScrollArea className="h-full p-4">
+          <div ref={chatContainerRef}>
+            {newChat && messages.length === 1 && (
+              <div className="text-center text-muted-foreground flex items-center justify-center h-full text-3xl">
+                <p>Yo {user?.fullName ?? "test"}! Start chatting down below.</p>
               </div>
-              {msg.role === 'assistant' && (
-                <div className="text-xs text-gray-500 text-left">
-                  {msg.tokensPerSecond ? `${msg.tokensPerSecond.toFixed(2)} tokens/s` : ''}
+            )}
+
+            {messages.slice(1).map((msg, index) => {
+              const isUser = msg.role === 'user';
+              return (
+                <div key={index} className={`mb-2 ${isUser ? 'text-right' : 'text-left'}`}>
+                  {/* Thinking Section - Conditionally Rendered */}
+                  {msg.role === 'assistant' && msg.thinking && (
+                    <Collapsible className="mb-2">
+                      <CollapsibleTrigger>
+                        <Badge variant="secondary">Model is thinking...</Badge>
+                      </CollapsibleTrigger>
+                      <CollapsibleContent className="p-2 text-sm text-muted-foreground">
+                        {msg.thinking}
+                      </CollapsibleContent>
+                    </Collapsible>
+                  )}
+
+                  {/* Main Message Content */}
+                  <Badge
+                    variant={isUser ? "secondary" : "default"}
+                    className={`inline-block p-2 rounded-md ${isUser ? 'bg-secondary text-secondary-foreground' : 'bg-slate-700 text-slate-200 text-sm'}`}
+                  >
+                    {msg.content}
+                  </Badge>
+
+                  {/* Tokens Per Second - Conditionally Rendered */}
+                  {msg.role === 'assistant' && (
+                    (msg.tokensPerSecond || msg.content) ? (
+                      <>
+                        {msg.tokensPerSecond ? `${msg.tokensPerSecond.toFixed(2)} tokens/s` : ''}
+                      </>
+                    ) : null
+                  )}
                 </div>
-              )}
-            </div>
-          );
-        })}
+              );
+            })}
 
-        {loadingResponse && (
-          <div className="text-left">
-            <div className="inline-block p-2 rounded-lg bg-gray-100 text-slate-800">
-              Thinking...
-            </div>
+            {loadingResponse && (
+              <div className="text-left">
+                <Badge variant="outline" className="inline-block p-2 rounded-md bg-slate-800 text-slate-200">
+                  Thinking...
+                </Badge>
+              </div>
+            )}
+
+            {responseError && (
+              <div className="text-left">
+                <Badge variant="destructive" className="inline-block p-2 rounded-md bg-destructive text-destructive-foreground">
+                  Error: {responseError}
+                </Badge>
+              </div>
+            )}
           </div>
-        )}
-
-        {responseError && (
-          <div className="text-left">
-            <div className="inline-block p-2 rounded-lg bg-red-100 text-red-500 text-slate-800">
-              Error: {responseError}
-            </div>
-          </div>
-        )}
-
+        </ScrollArea>
       </div>
 
       {/* Bottom Bar (Input area) */}
-      <div className="bg-white p-4 border-t border-gray-200">
+      <Card className="border-0 shadow-none bg-transparent">
+        <CardContent className="p-4">
+          {/* Model Selection Dropdown */}
+          {loadingModels && (
+            <div className="flex gap-2">
+              <Skeleton className="h-4 w-[100px]" />
+            </div>
+          )}
+          {modelError && <p className="text-red-500">{modelError}</p>}
 
-        {/* Model Selection Dropdown */}
-        {loadingModels && <p className="text-gray-500">Loading models...</p>}
-        {modelError && <p className="text-red-500">Error: {modelError}</p>}
-
-        {!loadingModels && !modelError && (
-          <div className="mb-2">
-            <label htmlFor="modelSelect" className="block text-sm font-medium text-gray-700">Select Model:</label>
-            <select
-              id="modelSelect"
-              className="mt-1 block w-full pl-3 pr-10 py-2 text-base border-gray-300 focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm rounded-md shadow-sm text-slate-900"
-              value={selectedModel}
-              onChange={(e) => setSelectedModel(e.target.value)}
-              disabled={Boolean(loadingModels || modelError || loadingResponse)} // Disable if loading or error or waiting for a response
-            >
-              {models.map((model) => (
-                <option key={model.id} value={model.id}>{model.id}</option>
-              ))}
-            </select>
+          {!loadingModels && !modelError && (
+            <div className="mb-4">
+              <Label htmlFor="modelSelect">Select Model:</Label>
+              <Popover open={open} onOpenChange={setOpen}>
+                <PopoverTrigger asChild>
+                  <Button
+                    variant="outline"
+                    role="combobox"
+                    aria-expanded={open}
+                    className="w-full justify-between"
+                  >
+                    {selectedModel
+                      ? models.find((model) => model.id === selectedModel)?.id
+                      : "Select a model..."}
+                    <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+                  </Button>
+                </PopoverTrigger>
+                <PopoverContent className="w-full p-0">
+                  <Command>
+                    <CommandInput placeholder="Search model..." />
+                    <CommandList>
+                      <CommandEmpty>No model found.</CommandEmpty>
+                      <CommandGroup>
+                        {models.map((model) => (
+                          <CommandItem
+                            key={model.id}
+                            value={model.id}
+                            onSelect={(currentValue) => {
+                              setSelectedModel(currentValue === selectedModel ? "" : currentValue)
+                              setOpen(false)
+                            }}
+                          >
+                            <Check
+                              className="mr-2 h-4 w-4"
+                              style={{ visibility: selectedModel === model.id ? 'visible' : 'hidden' }}
+                            />
+                            {model.id}
+                          </CommandItem>
+                        ))}
+                      </CommandGroup>
+                    </CommandList>
+                  </Command>
+                </PopoverContent>
+              </Popover>
+            </div>
+          )}
+          {/* Choose Style Dropdown */}
+          <div className="mb-4">
+            <Label htmlFor="styleSelect">Choose Style:</Label>
+            <Select onValueChange={setSelectedStyle}>
+              <SelectTrigger className="w-full">
+                <SelectValue placeholder="Select a style" />
+              </SelectTrigger>
+              <SelectContent>
+                {styleOptions.map((style) => (
+                  <SelectItem key={style.value} value={style.value}>
+                    {style.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </div>
-        )}
-
-        <div className="flex items-center">
-          <input
-            type="text"
-            placeholder="Type something..."
-            className="flex-grow p-2 border border-gray-300 rounded focus:outline-none focus:ring focus:border-blue-300 shadow-sm text-slate-900"
-            value={message}
-            onChange={(e) => setMessage(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' && !loadingResponse) { // Disable enter key if waiting for a response
-                void handleSendMessage();
-              }
-            }}
-            disabled={Boolean(loadingModels || modelError || loadingResponse)} // Disable input while loading or error or waiting for a response
-          />
-          <button
-            onClick={handleFileUpload}
-            className="ml-2 px-4 py-2 bg-gray-200 hover:bg-gray-300 rounded border border-gray-300 shadow-sm"
-            disabled={loadingResponse} // Disable upload while waiting for a response
-            title="Upload File"
-          >
-            <IoAddCircleSharp />
-          </button>
-          <button
-            onClick={handleSendMessage}
-            className="ml-2 px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-600"
-            disabled={loadingResponse} // Disable send while waiting for a response
-            title="Send Message"
-          >
-            <FaPlay />
-          </button>
-        </div>
-      </div>
+          <div className="flex items-center space-x-2">
+            <Input
+              type="text"
+              placeholder="How can we help you today?"
+              value={message}
+              onChange={(e) => setMessage(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && !loadingResponse) {
+                  void handleSendMessage();
+                }
+              }}
+              disabled={Boolean(loadingModels ?? modelError ?? loadingResponse)}
+              className="flex-grow" // Make input take available space
+            />
+            <Button
+              type="button"
+              onClick={handleFileUpload}
+              variant="secondary"
+              disabled={loadingResponse}
+              title="Upload File"
+            >
+              <IoAddCircleSharp className="h-4 w-4" />
+            </Button>
+            <Button
+              type="button"
+              onClick={handleImageUpload}
+              variant="secondary"
+              disabled={loadingResponse}
+              title="Upload Image"
+            >
+              <FaImage className="h-4 w-4" />
+            </Button>
+            <Button
+              onClick={handleSendMessage}
+              disabled={loadingResponse}
+              title="Send Message"
+            >
+              <FaPlay className="h-4 w-4" />
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
     </div>
   );
 }
