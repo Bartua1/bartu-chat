@@ -1,7 +1,7 @@
 'use client';
 // ChatComponent.jsx
 import { useState, useEffect, useRef } from 'react';
-import { FaFileUpload, FaPlay, FaImage } from 'react-icons/fa'; // Import file upload and run icons
+import { FaFileUpload, FaPlay, FaImage } from 'react-icons/fa';
 import { IoAddCircleSharp } from "react-icons/io5";
 import { OpenAI } from 'openai';
 import { useAuth, useUser } from '@clerk/nextjs';
@@ -42,6 +42,8 @@ import {
 import { Popover, PopoverContent, PopoverTrigger } from "~/components/ui/popover"
 import { Check, ChevronsUpDown } from "lucide-react"
 import { useChat } from './chat-context'
+import { CodeBlock, CopyBlock, dracula } from "react-code-blocks";
+import { Copy, CheckCircle } from "lucide-react";
 
 
 interface Model {
@@ -86,6 +88,8 @@ export function ChatComponent() {
   const [startTime, setStartTime] = useState(null);
   const [totalTokens, setTotalTokens] = useState(0);
   const [systemInstructions, setSystemInstructions] = useState("You are a helpful assistant. Keep your responses concise.");
+  const [copiedCode, setCopiedCode] = useState<string | null>(null);
+
 
   const chatContainerRef = useRef<HTMLDivElement>(null);
   const { toast: useToastHook } = useToast();
@@ -249,6 +253,29 @@ export function ChatComponent() {
     }
   };
 
+  const extractCode = (text: string): { code: string | null; language: string | undefined } => {
+    const codeBlockRegex = /```(.*?)\n([\s\S]*?)```/g; // Matches code blocks with or without language
+    const match = codeBlockRegex.exec(text);
+
+    if (match) {
+      const language = match[1]?.trim() ?? undefined; // Extract language, if specified
+      const code = match[2]?.trim() ?? null;        // Extract code content
+
+      return { code, language };
+    }
+
+    return { code: null, language: undefined };
+  };
+
+  const handleFileUpload = () => {
+    console.log('File upload functionality to be implemented');
+    toast.info("File upload functionality to be implemented")
+  };
+
+  const handleImageUpload = () => {
+    console.log('Image upload functionality to be implemented');
+    toast.info("Image upload functionality to be implemented");
+  };
 
   const handleSendMessage = async () => {
     if (message.trim() !== '') {
@@ -431,23 +458,24 @@ export function ChatComponent() {
     }
   };
 
-  const handleFileUpload = () => {
-    console.log('File upload functionality to be implemented');
-    toast.info("File upload functionality to be implemented")
+  const handleCopyCode = (code: string) => {
+    navigator.clipboard.writeText(code)
+      .then(() => {
+        setCopiedCode(code);
+        setTimeout(() => {
+          setCopiedCode(null); // Reset after a short delay
+        }, 2000);
+      })
+      .catch(err => {
+        console.error("Failed to copy code: ", err);
+        useToastHook({
+          title: "Error copying code",
+          description: "Failed to copy code to clipboard.",
+          variant: "destructive",
+        });
+      });
   };
 
-  const handleImageUpload = () => {
-    console.log('Image upload functionality to be implemented');
-    toast.info("Image upload functionality to be implemented");
-  };
-
-  const extractChatIdFromUrl = (url: string): string | null => {
-    const parts = url.split('/');
-    if (parts.length > 1 && parts[1] === 'chat') {
-      return parts[2];
-    }
-    return null;
-  };
 
   return (
     <div className="flex flex-col h-screen">
@@ -487,6 +515,9 @@ export function ChatComponent() {
 
             {messages.slice(1).map((msg, index) => {
               const isUser = msg.role === 'user';
+              const { code, language } = extractCode(msg.content);
+              const isCodeResponse = msg.role === 'assistant' && code !== null;
+
               return (
                 <div key={index} className={`mb-2 ${isUser ? 'text-right' : 'text-left'}`}>
                   {/* Thinking Section - Conditionally Rendered */}
@@ -502,12 +533,35 @@ export function ChatComponent() {
                   )}
 
                   {/* Main Message Content */}
-                  <Badge
-                    variant={isUser ? "secondary" : "default"}
-                    className={`inline-block p-2 rounded-md ${isUser ? 'bg-secondary text-secondary-foreground' : 'bg-slate-700 text-slate-200 text-sm'}`}
-                  >
-                    {msg.content}
-                  </Badge>
+                  {isCodeResponse ? (
+                    <div className="relative">
+                      <CodeBlock
+                        text={code!} // code is guaranteed to be non-null here
+                        language={language || "javascript"}
+                        theme={dracula}
+                        showLineNumbers={true}
+                      />
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="absolute top-2 right-2 text-gray-400 hover:text-gray-100"
+                        onClick={() => handleCopyCode(code!)}
+                      >
+                        {copiedCode === code ? (
+                          <CheckCircle className="h-4 w-4" />
+                        ) : (
+                          <Copy className="h-4 w-4" />
+                        )}
+                      </Button>
+                    </div>
+                  ) : (
+                    <Badge
+                      variant={isUser ? "secondary" : "default"}
+                      className={`inline-block p-2 rounded-md ${isUser ? 'bg-secondary text-secondary-foreground' : 'bg-slate-700 text-slate-200 text-sm'}`}
+                    >
+                      {msg.content}
+                    </Badge>
+                  )}
 
                   {/* Tokens Per Second - Conditionally Rendered */}
                   {msg.role === 'assistant' && (

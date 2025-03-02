@@ -39,17 +39,20 @@ Esta aplicación requiere LM Studio para funcionar. Sigue estos pasos para confi
 
 1.  Descarga e instala LM Studio desde [https://lmstudio.ai/](https://lmstudio.ai/).
 2.  Ejecuta LM Studio.
-3.  Configura LM Studio para que se conecte a la API de OpenAI.  Esto puede requerir configurar la URL de la API y la clave de API en la configuración de LM Studio.
+3.  Activa el modo developer.
+4.  En el modo developer activa LM Studio Server y en settings, activa todas las checkboxes: Enable CORS, Serve on Local Network (Esta sólo si quieres acceder fuera de casa), Just-in-Time Model Loading, Auto unload unused JIT loaded models (recomendación 5-10 minutos), Only Keep Last JIT Loaded Model.
 
 # Capturas de pantalla
 
 Aquí hay algunas capturas de pantalla que muestran la interfaz de la aplicación y cómo configurarla:
 
-1.  **Interfaz principal:**  [Captura de pantalla de la interfaz principal de la aplicación mostrando la barra de navegación, la lista de chats y el área de chat.]
-2.  **Configuración de variables de entorno:** [Captura de pantalla del archivo `.env` mostrando las variables de entorno configuradas.]
-3.  **Configuración de LM Studio:** [Captura de pantalla de la configuración de LM Studio mostrando cómo configurar la URL de la API de OpenAI y la clave de API.]
+1.  **Interfaz principal:**  
 
-(Nota:  Añade las capturas de pantalla reales a este archivo y actualiza las descripciones según sea necesario.)
+    ![alt interface](https://3pooft8s3y.ufs.sh/f/D1wyDGzKuE9V9tqyc97cCy2auw0rf9JAG8UoShKVd3ekT4sj)
+
+3.  **Configuración de LM Studio:** 
+
+    ![alt LM Studio config](https://3pooft8s3y.ufs.sh/f/D1wyDGzKuE9VdfRQzmGP7YZRqgce13BIapTbyOFM6hufvC2r)
 
 # Ejecución de la aplicación
 
