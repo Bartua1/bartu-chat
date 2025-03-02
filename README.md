@@ -1,20 +1,62 @@
-# T3 Stack Self Hosted LLM Chat
+# Instalación
 
+1.  Clona el repositorio:
 
-## TODO
+    ```bash
+    git clone <repository_url>
+    ```
+2.  Navega al directorio del proyecto:
 
-- [x] Make it deploy (vercel)
-- [x] Scaffold basic ui with mock data
-- [x] Actually set up a database (vercel postgres)
-- [x] Attach database to UI
-- [x] Add authentication (w/ clerk)
-- [x] Add chat controls
-- [x] Routing/chat page (paralllel route)
-- [ ] Delete button (w/ Server Actions)
-- [ ] Ratelimiting (upstash)
+    ```bash
+    cd bartu-chat
+    ```
+3.  Instala las dependencias:
 
-## Dissmissed
-- [ ] Error management (w/ Sentry)
-    Dissmissed because i dont plan on actually deploying this app but if somebody wanted, they could add this so we get email notifications when an error occurs, quite handy.
-- [ ] Analytics (posthog)
-    Dissmissed because im the only one who would use this app maybe in the future i do it idk.
+    ```bash
+    pnpm install
+    ```
+
+# Configuración
+
+1.  Crea un archivo `.env` en la raíz del proyecto.
+2.  Añade las siguientes variables de entorno al archivo `.env`:
+
+    ```
+    POSTGRES_URL="<URL de tu base de datos PostgreSQL>"
+    OPEN_AI_URL="<URL de la API de OpenAI>"
+    OPEN_AI_API_KEY="<Tu clave de API de OpenAI>"
+    NODE_ENV="development" # o "production" o "test"
+    ```
+
+    *   `POSTGRES_URL`: La URL de tu base de datos PostgreSQL.  Por ejemplo: `postgresql://postgres:password@localhost:5432/bartu-chat`
+    *   `OPEN_AI_URL`: La URL de la API de OpenAI.
+    *   `OPEN_AI_API_KEY`: Tu clave de API de OpenAI.
+    *   `NODE_ENV`: El entorno en el que se está ejecutando la aplicación.  Por defecto es `development`.
+
+# Configuración de LM Studio
+
+Esta aplicación requiere LM Studio para funcionar. Sigue estos pasos para configurarlo:
+
+1.  Descarga e instala LM Studio desde [https://lmstudio.ai/](https://lmstudio.ai/).
+2.  Ejecuta LM Studio.
+3.  Configura LM Studio para que se conecte a la API de OpenAI.  Esto puede requerir configurar la URL de la API y la clave de API en la configuración de LM Studio.
+
+# Capturas de pantalla
+
+Aquí hay algunas capturas de pantalla que muestran la interfaz de la aplicación y cómo configurarla:
+
+1.  **Interfaz principal:**  [Captura de pantalla de la interfaz principal de la aplicación mostrando la barra de navegación, la lista de chats y el área de chat.]
+2.  **Configuración de variables de entorno:** [Captura de pantalla del archivo `.env` mostrando las variables de entorno configuradas.]
+3.  **Configuración de LM Studio:** [Captura de pantalla de la configuración de LM Studio mostrando cómo configurar la URL de la API de OpenAI y la clave de API.]
+
+(Nota:  Añade las capturas de pantalla reales a este archivo y actualiza las descripciones según sea necesario.)
+
+# Ejecución de la aplicación
+
+1.  Ejecuta la aplicación en modo de desarrollo:
+
+    ```bash
+    pnpm dev
+    ```
+
+    Esto iniciará el servidor de desarrollo en `http://localhost:3000`.
