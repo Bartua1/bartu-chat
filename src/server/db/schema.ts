@@ -9,7 +9,6 @@ import {
   timestamp,
   varchar,
 } from "drizzle-orm/pg-core";
-
 /**
  * This is an example of how to use the multi-project schema feature of Drizzle ORM. Use the same
  * database instance for multiple projects.
@@ -19,11 +18,11 @@ import {
 export const createTable = pgTableCreator((name) => `bartu-chat_${name}`);
 
 export const chats = createTable(
-  "chat",
+  "chats",
   {
     id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
     name: varchar("name", { length: 256 }).notNull(),
-    user_id: integer("user_id").notNull(),
+    userId: varchar("userId", { length: 256 }).notNull(),
     url: varchar("url", { length: 1024 }).notNull(),
     createdAt: timestamp("created_at", { withTimezone: true })
       .default(sql`CURRENT_TIMESTAMP`)
@@ -32,18 +31,20 @@ export const chats = createTable(
       () => new Date()
     ),
   },
-  (example) => ({
-    userIdIndex: index("user_id_idx").on(example.user_id),
+  (table) => ({ // Use 'table' instead of 'example' - more descriptive
+    nameIndex: index("name_idx").on(table.name), // Prefix index names with table name
   })
 );
 
 export const messages = createTable(
-  "message",
+  "messages",
   {
     id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
-    chat_id: integer("chat_id").notNull(),
-    user_id: integer("user_id").notNull(),
+    chatId: integer("chat_id").notNull(),
+    userId: varchar("userId", { length: 256 }).notNull(),
     content: varchar("content", { length: 2048 }).notNull(),
+    model: varchar("model", { length: 256 }).notNull(),
+    sender: varchar("sender", { length: 256 }).notNull(),
     createdAt: timestamp("created_at", { withTimezone: true })
       .default(sql`CURRENT_TIMESTAMP`)
       .notNull(),
@@ -51,7 +52,7 @@ export const messages = createTable(
       () => new Date()
     ),
   },
-  (example) => ({
-    chatIdIndex: index("chat_id_idx").on(example.chat_id),
+  (table) => ({ // Use 'table' instead of 'example' - more descriptive
+    chatIdIndex: index("messages_chat_id_idx").on(table.chatId), // Prefix index names with table name
   })
-)
+);

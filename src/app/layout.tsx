@@ -1,3 +1,4 @@
+// layout.tsx
 import "~/styles/globals.css";
 
 import { GeistSans } from "geist/font/sans";
@@ -5,8 +6,12 @@ import { type Metadata } from "next";
 
 import { Inter } from "next/font/google";
 
-import { ClerkProvider } from "@clerk/nextjs";
+import { ClerkProvider, SignedIn, SignedOut } from "@clerk/nextjs";
+import { CustomSignIn } from "./_components/sign-in";
 import { TopNav } from "./_components/topnav";
+import { SideNav } from "./_components/sidenav";
+import { useMediaQuery } from 'usehooks-ts'; // Import the hook
+import { LayoutContent } from "./_components/layout-content";
 
 const inter = Inter({
   subsets: ["latin"],
@@ -22,12 +27,12 @@ export const metadata: Metadata = {
 export default function RootLayout({
   children,
 }: Readonly<{ children: React.ReactNode }>) {
+
   return (
     <ClerkProvider>
       <html lang="en" className={`${GeistSans.variable}`}>
         <body>
-          <TopNav/>
-          {children}
+          <LayoutContent>{children}</LayoutContent>
         </body>
       </html>
     </ClerkProvider>

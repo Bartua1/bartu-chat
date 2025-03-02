@@ -2,6 +2,7 @@ import { SignedIn } from "@clerk/nextjs";
 import Link from "next/link";
 import { db } from "~/server/db";
 import { SignedOut } from "@clerk/nextjs";
+import { ChatComponent } from "~/app/_components/chat";
 
 export const dynamic = "force-dynamic";
 
@@ -15,21 +16,7 @@ const mockUrls = [
 const mockImages = mockUrls.map((url, index) => ({
   id: index + 1,
   url,
-}))
-
-export async function Images() {
-  return (
-    <div className="flex flex-wrap gap-4">
-      {mockImages.map((image) => (
-        <div key={image.id} className="flex flex-col gap-2">
-          <img src={image.url} alt="image" className="flex w-48" />
-          <div className="text-sm text-gray-500">{image.name}</div>
-        </div>
-      ))
-      }
-    </div>
-  );
-}
+}));
 
 export default async function HomePage() {
   // const posts = await db.query.posts.findMany();
@@ -40,7 +27,7 @@ export default async function HomePage() {
         <div className="w-full h-full text-2xl text-center">Please sign in above.</div>
       </SignedOut>
       <SignedIn>
-        <Images />
+        <ChatComponent />
       </SignedIn>
     </main>
   );

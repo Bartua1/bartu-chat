@@ -3,5 +3,10 @@
 @tailwind utilities;
 
 body {
-    @apply bg-black text-white;
+    @apply bg-white text-slate-900;
+}
+
+.SideNav {
+    /* Make it background slate-800 */
+    @apply bg-slate-900;
 }
