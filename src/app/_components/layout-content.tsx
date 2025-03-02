@@ -2,7 +2,7 @@
 'use client';
 import { useMediaQuery } from 'usehooks-ts';
 import { SignedIn, SignedOut } from "@clerk/nextjs";
-import { CustomSignIn } from "./sign-in";
+import { LoginForm } from "./sign-in";
 import { TopNav } from "./topnav";
 import { SideNav } from "./sidenav";
 import { SidebarProvider, SidebarInset } from "~/components/ui/sidebar";
@@ -32,7 +32,7 @@ export function LayoutContent({ children }: { children: React.ReactNode }) {
         )}
       </SignedIn>
       <SignedOut>
-        <CustomSignIn />
+        <LoginForm />
       </SignedOut>
     </>
   );
