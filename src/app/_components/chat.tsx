@@ -1,9 +1,8 @@
 'use client';
-// ChatComponent.jsx
+// ChatComponent.tsx
 import { useState, useEffect, useRef } from 'react';
 import { FaFileUpload, FaPlay, FaImage } from 'react-icons/fa';
 import { IoAddCircleSharp } from "react-icons/io5";
-import { OpenAI } from 'openai';
 import { useAuth, useUser } from '@clerk/nextjs';
 import { useParams } from 'next/navigation';
 import {
@@ -45,7 +44,6 @@ import { useChat } from './chat-context'
 import { CodeBlock, CopyBlock, dracula } from "react-code-blocks";
 import { Copy, CheckCircle } from "lucide-react";
 
-
 interface Model {
   id: string;
   object: string;
@@ -58,12 +56,13 @@ interface StyleOption {
   label: string;
   description: string;
 }
+
 interface Message {
   role: 'system' | 'user' | 'assistant';
   content: string;
   partial?: boolean;
   tokensPerSecond?: number;
-  thinking?: string | null; // Added thinking to the Message interface
+  thinking?: string | null;
 }
 
 export function ChatComponent() {
@@ -74,10 +73,9 @@ export function ChatComponent() {
   const [newChat, setNewChat] = useState(true);
   const [chatName, setChatName] = useState(null);
   const [chatId, setChatId] = useState(null);
-  const [open, setOpen] = useState(false)
+  const [open, setOpen] = useState(false);
   const [message, setMessage] = useState('');
-  const [messages, setMessages] = useState<Message[]>([]); // Initialize as empty array
-  const [client, setClient] = useState(null);
+  const [messages, setMessages] = useState<Message[]>([]);
   const [models, setModels] = useState<Model[]>([]);
   const [selectedModel, setSelectedModel] = useState('');
   const [loadingModels, setLoadingModels] = useState(true);
@@ -89,12 +87,11 @@ export function ChatComponent() {
   const [totalTokens, setTotalTokens] = useState(0);
   const [systemInstructions, setSystemInstructions] = useState("You are a helpful assistant. Keep your responses concise.");
   const [copiedCode, setCopiedCode] = useState<string | null>(null);
-
+  const [streamingResponse, setStreamingResponse] = useState<ReadableStreamDefaultReader<Uint8Array> | null>(null);
 
   const chatContainerRef = useRef<HTMLDivElement>(null);
   const { toast: useToastHook } = useToast();
-  const { addChat, fetchChats } = useChat(); // Get the addChat function
-
+  const { addChat, fetchChats } = useChat();
 
   const styleOptions: StyleOption[] = [
     { value: "Normal", label: "Normal", description: "Default responses from Claude" },
@@ -108,28 +105,21 @@ export function ChatComponent() {
   useEffect(() => {
     // Initialize the messages with the system instruction
     setMessages([{ role: 'system', content: systemInstructions }]);
-  }, [systemInstructions]); // Re-run when systemInstructions change
+  }, [systemInstructions]);
 
   useEffect(() => {
-    const fetchOpenAIUrl = async () => {
-      const response = await fetch('/api/apis/openai/apis');
-      const data = await response.json();
-      const openAIUrl = data.openai;
-
-      const clientInstance = new OpenAI({
-        baseURL: openAIUrl,
-        apiKey: "dummy",
-        dangerouslyAllowBrowser: true
-      });
-
-      setClient(clientInstance);
-
+    const fetchModels = async () => {
       setLoadingModels(true);
       setModelError(null);
 
       try {
-        const response = await clientInstance.models.list();
-        const data = response.data;
+        const response = await fetch('/api/models');
+        
+        if (!response.ok) {
+          throw new Error(`HTTP error! status: ${response.status}`);
+        }
+        
+        const data = await response.json();
 
         if (data && Array.isArray(data)) {
           setModels(data);
@@ -137,7 +127,7 @@ export function ChatComponent() {
             setSelectedModel(data[0]?.id ?? '');
           }
         } else {
-          throw new Error("Invalid response format from /v1/models");
+          throw new Error("Invalid response format from /api/models");
         }
       } catch (error: unknown) {
         const errorMessage = error instanceof Error ? error.message : "Unknown error";
@@ -146,21 +136,50 @@ export function ChatComponent() {
           title: "Error fetching models",
           description: errorMessage,
           variant: "destructive",
-        })
+        });
         setModelError(errorMessage);
       } finally {
         setLoadingModels(false);
       }
     };
 
-    void fetchOpenAIUrl();
-  }, []);
+    void fetchModels();
+  }, [useToastHook]);
 
   const extractThinking = (content: string): { thinking: string | null; answer: string } => {
-    const thinkingMatches = [...content.matchAll(/<(think|thought|thinking)>(.*?)<\/(think|thought|thinking)>/gi)];
-    const thinking = thinkingMatches.map(match => match[2] ?? '').join("\n");
-    const answer = content.replace(/<(think|thought|thinking)>.*?<\/(think|thought|thinking)>/gi, '').trim();
-    return { thinking: thinking || null, answer };
+    // Match any tag that looks like <think>, <thinking>, or <thought> (case insensitive)
+    const thinkingRegex = /<(think|thought|thinking)>([\s\S]*?)<\/(think|thought|thinking)>/gi;
+    
+    // Get all thinking matches
+    const thinkingMatches = content.match(thinkingRegex);
+    
+    // If no thinking tags found, return original content
+    if (!thinkingMatches) {
+      return { thinking: null, answer: content };
+    }
+    
+    // Extract all thinking content
+    let thinking = '';
+    thinkingMatches.forEach(match => {
+      // Get the content between the tags
+      const extractedContent = match.replace(/<(think|thought|thinking)>([\s\S]*?)<\/(think|thought|thinking)>/i, '$2');
+      thinking += extractedContent + '\n';
+    });
+    
+    // Remove the thinking tags from the original content
+    let answer = content;
+    thinkingMatches.forEach(match => {
+      answer = answer.replace(match, '');
+    });
+    
+    // Trim any excess whitespace
+    answer = answer.trim();
+    thinking = thinking.trim();
+    
+    return { 
+      thinking: thinking.length > 0 ? thinking : null, 
+      answer 
+    };
   };
 
   useEffect(() => {
@@ -168,47 +187,38 @@ export function ChatComponent() {
       if (chatUrlFromParams) {
         setLoadingResponse(true);
         setNewChat(false);
-        if (chatUrlFromParams) {
-          setChatId(chatUrlFromParams);
-          console.log("Loading previous messages for chatId:", chatUrlFromParams);
-          try {
-            const response = await fetch(`/api/chats/${chatUrlFromParams}/messages`);
-            if (!response.ok) {
-              throw new Error(`HTTP error! status: ${response.status}`);
-            }
-            const data = await response.json() as any[];
-
-            const formattedMessages = data.map(msg => {
-              const { thinking, answer } = extractThinking(msg.content);
-              return {
-                role: msg.sender === 'user' ? 'user' : 'assistant',
-                content: answer,
-                thinking: thinking,
-              };
-            });
-
-            // Load previous messages, keeping the system message
-            setMessages([{ role: 'system', content: systemInstructions }, ...formattedMessages]);
-          } catch (error: unknown) {
-            const errorMessage = error instanceof Error ? error.message : "Unknown error";
-            console.error("Failed to load previous messages:", error);
-            useToastHook({
-              title: "Error loading previous messages",
-              description: errorMessage,
-              variant: "destructive",
-            })
-            setResponseError(errorMessage);
-          } finally {
-            setLoadingResponse(false);
+        setChatId(chatUrlFromParams);
+        console.log("Loading previous messages for chatId:", chatUrlFromParams);
+        
+        try {
+          const response = await fetch(`/api/chats/${chatUrlFromParams}/messages`);
+          if (!response.ok) {
+            throw new Error(`HTTP error! status: ${response.status}`);
           }
-        } else {
-          console.error("Could not extract chatId from URL:", chatUrlFromParams);
+          
+          const data = await response.json() as any[];
+
+          const formattedMessages = data.map(msg => {
+            const { thinking, answer } = extractThinking(msg.content);
+            return {
+              role: msg.sender === 'user' ? 'user' : 'assistant',
+              content: answer,
+              thinking: thinking,
+            };
+          });
+
+          // Load previous messages, keeping the system message
+          setMessages([{ role: 'system', content: systemInstructions }, ...formattedMessages]);
+        } catch (error: unknown) {
+          const errorMessage = error instanceof Error ? error.message : "Unknown error";
+          console.error("Failed to load previous messages:", error);
           useToastHook({
-            title: "Error extracting chatId from URL",
-            description: "Invalid chat URL",
+            title: "Error loading previous messages",
+            description: errorMessage,
             variant: "destructive",
-          })
-          setResponseError("Invalid chat URL");
+          });
+          setResponseError(errorMessage);
+        } finally {
           setLoadingResponse(false);
         }
       }
@@ -217,41 +227,11 @@ export function ChatComponent() {
     void loadPreviousMessages();
   }, [chatUrlFromParams, useToastHook, systemInstructions]);
 
-
   useEffect(() => {
     if (chatContainerRef.current) {
       chatContainerRef.current.scrollTop = chatContainerRef.current.scrollHeight;
     }
   }, [messages]);
-
-  const uploadMessage = async (chatUrl: string, model: string, userId: string, content: string, sender: string) => {
-    try {
-      const response = await fetch('/api/uploadmessage', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ chatUrl, model, userId, content, sender }),
-      });
-
-      if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
-      }
-
-      const data = await response.json();
-      console.log('Message uploaded successfully:', data);
-
-    } catch (error: unknown) {
-      const errorMessage = error instanceof Error ? error.message : "Unknown error";
-      console.error("Could not upload message:", error);
-      useToastHook({
-        title: "Error uploading message",
-        description: errorMessage,
-        variant: "destructive",
-      })
-      setResponseError(errorMessage);
-    }
-  };
 
   const extractCode = (text: string): { code: string | null; language: string | undefined } => {
     const codeBlockRegex = /```(.*?)\n([\s\S]*?)```/g; // Matches code blocks with or without language
@@ -269,7 +249,7 @@ export function ChatComponent() {
 
   const handleFileUpload = () => {
     console.log('File upload functionality to be implemented');
-    toast.info("File upload functionality to be implemented")
+    toast.info("File upload functionality to be implemented");
   };
 
   const handleImageUpload = () => {
@@ -277,9 +257,85 @@ export function ChatComponent() {
     toast.info("Image upload functionality to be implemented");
   };
 
+  // Function to process the streaming response
+  const processStream = async (reader: ReadableStreamDefaultReader<Uint8Array>) => {
+    let fullReply = "";
+    let currentTokenCount = 0;
+    let tps = 0;
+
+    setStartTime(Date.now());
+
+    const decoder = new TextDecoder();
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        
+        const chunk = decoder.decode(value, { stream: true });
+        const lines = chunk.split('\n').filter(line => line.trim() !== '');
+        
+        for (const line of lines) {
+          if (line.startsWith('data: ')) {
+            const data = line.slice(6);
+            if (data === '[DONE]') continue;
+            
+            try {
+              const parsedData = JSON.parse(data);
+              if (parsedData.choices && parsedData.choices[0] && parsedData.choices[0].delta && parsedData.choices[0].delta.content) {
+                const text = parsedData.choices[0].delta.content;
+                fullReply += text;
+                currentTokenCount += 1;
+                setTotalTokens(prevTotalTokens => prevTotalTokens + 1);
+
+                const elapsedTime = (Date.now() - startTime!) / 1000;
+                tps = currentTokenCount / elapsedTime;
+                setTokensPerSecond(tps);
+
+                const { thinking, answer } = extractThinking(fullReply);
+                setMessages(prevMessages => {
+                  const lastMessage = prevMessages.length > 0 ? prevMessages[prevMessages.length - 1] : null;
+                  if (lastMessage && lastMessage.role === 'assistant' && lastMessage.partial) {
+                    // Update existing partial message
+                    return prevMessages.map((msg, index) =>
+                      index === prevMessages.length - 1
+                        ? { ...msg, content: answer, partial: true, tokensPerSecond: tps, thinking: thinking }
+                        : msg
+                    );
+                  } else {
+                    // Add new partial message
+                    const newMessage: Message = { role: 'assistant', content: answer, partial: true, tokensPerSecond: tps, thinking: thinking };
+                    return [...prevMessages, newMessage];
+                  }
+                });
+              }
+            } catch (err) {
+              console.error("Error parsing stream data:", err);
+            }
+          }
+        }
+      }
+      
+      // After the loop, update the final message to be non-partial
+      const { thinking: finalThinking, answer: finalAnswer } = extractThinking(fullReply);
+      setMessages(prevMessages => {
+        return prevMessages.map(msg => {
+          if (msg.role === 'assistant' && msg.partial) {
+            return { ...msg, content: finalAnswer, thinking: finalThinking, partial: false, tokensPerSecond: tps };
+          }
+          return msg;
+        });
+      });
+      
+      return fullReply;
+    } catch (error) {
+      console.error("Stream processing error:", error);
+      throw error;
+    }
+  };
+
   const handleSendMessage = async () => {
     if (message.trim() !== '') {
-      let currentChatId: string | null = chatId; // Capture chatId value immediately
+      let currentChatId: string | null = chatId;
       let userMessageContent = message;
 
       if (selectedStyle && selectedStyle !== "Normal") {
@@ -296,18 +352,27 @@ export function ChatComponent() {
 
         if (newChat && !chatUrlFromParams) {
           try {
-            if (!client) {
-              throw new Error("OpenAI client is not initialized.");
-            }
-            const titleResponse = await client.chat.completions.create({
-              model: selectedModel ?? models[0]?.id ?? "deepseek-coder-v2-lite-instruct",
-              messages: [{ role: 'user', content: message }, { role: 'user', content: "Suggest a concise, 6-word title for this conversation. Return only the title, with no additional explanation or preamble." }],
-              max_tokens: 10,
+            // Generate title for new chat on the server
+            const titleResponse = await fetch('/api/generate-title', {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+              },
+              body: JSON.stringify({ 
+                message: message,
+                model: selectedModel
+              }),
             });
 
-            const title = titleResponse.choices[0]?.message?.content ?? `chat - ${new Date().toISOString()}`;
+            if (!titleResponse.ok) {
+              throw new Error(`HTTP error! status: ${titleResponse.status}`);
+            }
+
+            const titleData = await titleResponse.json();
+            const title = titleData.title ?? `chat - ${new Date().toISOString()}`;
             setChatName(title);
 
+            // Create new chat on the server
             const response = await fetch('/api/uploadchat', {
               method: 'POST',
               headers: {
@@ -325,17 +390,15 @@ export function ChatComponent() {
             setChatId(currentChatId);
             setNewChat(false);
 
-            // **Add the new chat to the context:**
+            // Add the new chat to the context
             const newChatObject = {
-              id: Date.now(), // Or get ID from the `chat` response if your API returns it
+              id: Date.now(),
               name: title,
               userId: userId!,
               url: currentChatId
             };
 
             addChat(newChatObject);
-
-
           } catch (error: unknown) {
             const errorMessage = error instanceof Error ? error.message : "Unknown error";
             console.error("Could not create chat:", error);
@@ -343,13 +406,13 @@ export function ChatComponent() {
               title: "Error creating chat",
               description: errorMessage,
               variant: "destructive",
-            })
+            });
             setResponseError(errorMessage);
             setLoadingResponse(false);
             return;
           }
         } else {
-          currentChatId = chatId ?? (typeof chatUrlFromParams === 'string' ? chatUrlFromParams : null); // Directly use chatUrlFromParams
+          currentChatId = chatId ?? (typeof chatUrlFromParams === 'string' ? chatUrlFromParams : null);
 
           if (!currentChatId) {
             console.error("Chat ID is null or undefined.");
@@ -362,83 +425,70 @@ export function ChatComponent() {
         setTotalTokens(0);
         setTokensPerSecond(0);
 
-        // Include system prompt at the start of the messages array
-        const messagesForApi = [{ role: 'system', content: systemInstructions }, ...messages.slice(1), userMessage];
-
+        // Save user message to database
         if (currentChatId) {
-          console.log(`uploadMessage - currentChatId: ${currentChatId}, selectedModel: ${selectedModel ?? models[0]?.id ?? "deepseek-coder-v2-lite-instruct"}, userId: ${userId!}, message: ${message}`);
-          await uploadMessage(currentChatId, selectedModel ?? models[0]?.id ?? "deepseek-coder-v2-lite-instruct", userId!, message, 'user');
-          console.log("uploadMessage call finished for user message"); // Add this line
-        } else {
-          console.error("Error uploading user message: Chat URL is null. Current Chat URL: ", currentChatId);
-        }
-
-        const response = await client.chat.completions.create({
-          model: selectedModel ?? models[0]?.id ?? "deepseek-coder-v2-lite-instruct",
-          messages: messagesForApi,
-          stream: true,
-        });
-
-        let fullReply = "";
-        let currentTokenCount = 0;
-        let assistantThinking = null;
-        let tps = 0; // Initialize tps here
-
-        setLoadingResponse(true);
-
-        for await (const chunk of response) {
-          if (chunk.choices && chunk.choices[0] && chunk.choices[0].delta && chunk.choices[0].delta.content) {
-            const text = chunk.choices[0].delta.content;
-            fullReply += text;
-            currentTokenCount += 1;
-            setTotalTokens(prevTotalTokens => prevTotalTokens + 1);
-
-            if (startTime) {
-              const elapsedTime = (Date.now() - startTime) / 1000;
-              tps = currentTokenCount / elapsedTime;
-              setTokensPerSecond(tps);
-            }
-
-            const { thinking, answer } = extractThinking(fullReply);
-            assistantThinking = thinking; // Update extracted thinking
-            setMessages(prevMessages => {
-              const lastMessage = prevMessages.length > 0 ? prevMessages[prevMessages.length - 1] : null;
-              if (lastMessage && lastMessage.role === 'assistant' && lastMessage.partial) {
-                // Update existing partial message
-                return prevMessages.map((msg, index) =>
-                  index === prevMessages.length - 1
-                    ? { ...msg, content: answer, partial: true, tokensPerSecond: tps, thinking: thinking }
-                    : msg
-                );
-              } else {
-                // Add new partial message
-                const newMessage: Message = { role: 'assistant', content: answer, partial: true, tokensPerSecond: tps, thinking: thinking };
-                return [...prevMessages, newMessage];
-              }
-            });
-          }
-        }
-
-        // After the loop, update the final message to be non-partial
-        const { thinking: finalThinking, answer: finalAnswer } = extractThinking(fullReply);
-        setMessages(prevMessages => {
-          return prevMessages.map(msg => {
-            if (msg.role === 'assistant' && msg.partial) {
-              return { ...msg, content: finalAnswer, thinking: finalThinking, partial: false, tokensPerSecond: tps };
-            }
-            return msg;
+          await fetch('/api/uploadmessage', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ 
+              chatUrl: currentChatId, 
+              model: selectedModel, 
+              userId: userId!, 
+              content: message, 
+              sender: 'user' 
+            }),
           });
-        });
-
-        // Upload the full reply *after* the streaming is complete and the state is updated
-        if (currentChatId) {
-          console.log(`uploadMessage - currentChatId: ${currentChatId}, selectedModel: ${selectedModel ?? models[0]?.id ?? "deepseek-coder-v2-lite-instruct"}, userId: ${userId!}, fullReply: ${fullReply}`);
-          await uploadMessage(currentChatId, selectedModel ?? models[0]?.id ?? "deepseek-coder-v2-lite-instruct", userId!, fullReply, 'assistant');
-          console.log("uploadMessage call finished for assistant message");
-        } else {
-          console.error("Error uploading assistant message: Chat URL is null. Current Chat URL: ", currentChatId);
         }
 
+        // Get streaming response from server
+        const streamResponse = await fetch('/api/chat', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            messages: [
+              { role: 'system', content: systemInstructions },
+              ...messages.slice(1),
+              userMessage
+            ],
+            model: selectedModel,
+            stream: true,
+          }),
+        });
+
+        if (!streamResponse.ok) {
+          throw new Error(`HTTP error! status: ${streamResponse.status}`);
+        }
+
+        if (!streamResponse.body) {
+          throw new Error("Response body is null");
+        }
+
+        const reader = streamResponse.body.getReader();
+        setStreamingResponse(reader);
+        
+        // Process the stream
+        const fullReply = await processStream(reader);
+        
+        // After streaming is complete, save assistant message to database
+        if (currentChatId) {
+          await fetch('/api/uploadmessage', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ 
+              chatUrl: currentChatId, 
+              model: selectedModel, 
+              userId: userId!, 
+              content: fullReply, 
+              sender: 'assistant' 
+            }),
+          });
+        }
 
       } catch (error: unknown) {
         const errorMessage = error instanceof Error ? error.message : "Unknown error";
@@ -447,16 +497,26 @@ export function ChatComponent() {
           title: "Error sending message",
           description: errorMessage,
           variant: "destructive",
-        })
+        });
         setResponseError(errorMessage);
         const errorMessageObj: Message = { role: 'assistant', content: "Error: " + errorMessage };
         setMessages(prevMessages => [...prevMessages, errorMessageObj]);
       } finally {
         setLoadingResponse(false);
         setStartTime(null);
+        setStreamingResponse(null);
       }
     }
   };
+
+  // Clean up the stream if component unmounts or user cancels
+  useEffect(() => {
+    return () => {
+      if (streamingResponse) {
+        streamingResponse.cancel("Component unmounted or operation cancelled");
+      }
+    };
+  }, [streamingResponse]);
 
   const handleCopyCode = (code: string) => {
     navigator.clipboard.writeText(code)
@@ -476,14 +536,12 @@ export function ChatComponent() {
       });
   };
 
-
   return (
     <div className="flex flex-col h-screen">
       {/* Top Bar */}
       <Card className="border-0 shadow-none bg-transparent">
         <CardHeader className="pb-2 flex flex-row justify-between items-center">
           <CardTitle>Chat</CardTitle>
-
         </CardHeader>
         <CardContent className="p-2">
           <Collapsible className="border-slate-200 border p-4 rounded-md">
@@ -500,7 +558,6 @@ export function ChatComponent() {
             </CollapsibleContent>
           </Collapsible>
         </CardContent>
-
       </Card>
 
       {/* Middle Section (Conversation History) */}
