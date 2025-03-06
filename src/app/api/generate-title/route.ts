@@ -18,7 +18,7 @@ const generateTitleSchema = z.object({
 export async function POST(req: Request) {
   try {
     // Authenticate the user
-    const { userId } = auth();
+    const { userId } = getAuth(req);
     if (!userId) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
