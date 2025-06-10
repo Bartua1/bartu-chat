@@ -55,10 +55,10 @@ export async function POST(req: Request) {
 
     // Extract and clean the title
     const title = response.choices[0]?.message.content?.trim() || `Chat - ${new Date().toLocaleDateString()}`;
-    
+
     // Remove any quotes that might be in the title
     const cleanTitle = title.replace(/["']/g, "");
-    
+
     // If this is a thinking model (Response starts with <Think>), we need to delete whatever is inside the <Think> tag and return the rest
     if (cleanTitle.startsWith("<Think>")) {
       const thinkIndex = cleanTitle.indexOf("<Think>");

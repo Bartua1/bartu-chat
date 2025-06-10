@@ -5,11 +5,9 @@ import { NextResponse } from "next/server";
 import { getAuth  } from "@clerk/nextjs/server";
 
 // Get chats for a specific user
-export async function GET( request: Request, context: { params: { userId: string } }) {
-    const requestedUserId = context.params.userId;
+export async function GET( request: Request, { params }: { params: { userId: string } }) {
 
-    // Verify user authentication
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
+    const requestedUserId = await getRequestUserId(params);
     const { userId } = getAuth(request);
 
     // Only allow users to access their own chats
@@ -18,7 +16,7 @@ export async function GET( request: Request, context: { params: { userId: string
     }
 
     // Get all chats and filter by user ID
-    const allChats = await getChats();
+    const allChats = await getChats(); // AWAIT IS CORRECT HERE
     const userChats = allChats.filter(chat => chat.userId === userId);
 
     // Sort the chats by createdAt in descending order (newest first)
@@ -26,6 +24,11 @@ export async function GET( request: Request, context: { params: { userId: string
 
 
   return NextResponse.json(sortedUserChats);
+}
+
+async function getRequestUserId(params: { userId: string }) {
+    const { userId } = await params;
+    return userId;
 }
 
 interface ChatData {
