@@ -12,11 +12,12 @@ interface MessageData {
     userId: string;
     content: string;
     sender: string; // System or User
+    attachmentIds?: number[];
 }
 
 export async function POST(req: Request) {
-    const { chatUrl, model, userId, content, sender } = (await req.json()) as MessageData;
-    const newMessage = await createMessage(model, userId, content, chatUrl, sender);
+    const { chatUrl, model, userId, content, sender, attachmentIds } = (await req.json()) as MessageData;
+    const newMessage = await createMessage(model, userId, content, chatUrl, sender, attachmentIds);
     return NextResponse.json(newMessage);
 }
 

@@ -104,18 +104,16 @@ export const users = createTable(
   })
 );
 
-export const AIModels = createTable(
-  "ai_models",
+export const userAPIs = createTable(
+  "user_apis",
   {
     id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
-    displayName: varchar("display_name", { length: 256 }).notNull(),
-    provider: varchar("provider", { length: 256 }).notNull(),
-    apiKey: varchar("api_key", { length: 256 }).notNull(),
+    userId: varchar("user_id", { length: 256 }).notNull(),
+    name: varchar("name", { length: 256 }).notNull(), // User-friendly name for the API
+    provider: varchar("provider", { length: 256 }).notNull(), // e.g., "openai", "anthropic", "custom"
+    apiKey: varchar("api_key", { length: 512 }).notNull(),
     apiUrl: varchar("api_url", { length: 1024 }).notNull(),
-    inputPrice: integer("input_price").notNull(), // Price per token for input.
-    outputPrice: integer("output_price").notNull(), // Price per token for output.
-    owner: varchar("owner", { length: 256 }).notNull(), // Basically if its ours or added by the user.
-    tags: text("tags").$type<string[]>(), // Store tags as a JSON array.
+    isActive: varchar("is_active", { length: 10 }).default("true").notNull(), // "true" or "false"
     createdAt: timestamp("created_at", { withTimezone: true })
       .default(sql`CURRENT_TIMESTAMP`)
       .notNull(),
@@ -123,8 +121,37 @@ export const AIModels = createTable(
       () => new Date()
     ),
   },
-  (table) => ({ // Use 'table' instead of 'example' - more descriptive
-    displayNameIndex: index("ai_models_display_name_idx").on(table.displayName), // Prefix index names with table name
+  (table) => ({
+    userIdIndex: index("user_apis_user_id_idx").on(table.userId),
+    userApiIndex: index("user_apis_user_api_idx").on(table.userId, table.id),
+  })
+);
+
+export const AIModels = createTable(
+  "ai_models",
+  {
+    id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+    userApiId: integer("user_api_id"), // Reference to user_apis table, nullable for system models
+    name: varchar("name", { length: 256 }).notNull(), // Model ID from API
+    displayName: varchar("display_name", { length: 256 }).notNull(),
+    provider: varchar("provider", { length: 256 }).notNull(),
+    inputPrice: integer("input_price").default(0).notNull(), // Price per token for input (in micro-cents)
+    outputPrice: integer("output_price").default(0).notNull(), // Price per token for output (in micro-cents)
+    owner: varchar("owner", { length: 256 }).notNull(), // "system" or userId
+    tags: text("tags").$type<string[]>(), // Store tags as a JSON array
+    maxTokens: integer("max_tokens"), // Max context length
+    isActive: varchar("is_active", { length: 10 }).default("true").notNull(), // "true" or "false"
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .default(sql`CURRENT_TIMESTAMP`)
+      .notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).$onUpdate(
+      () => new Date()
+    ),
+  },
+  (table) => ({
+    displayNameIndex: index("ai_models_display_name_idx").on(table.displayName),
+    ownerIndex: index("ai_models_owner_idx").on(table.owner),
+    userApiIndex: index("ai_models_user_api_idx").on(table.userApiId),
   })
 );
 

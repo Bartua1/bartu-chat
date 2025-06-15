@@ -45,7 +45,7 @@ export function LayoutContent({ children }: { children: React.ReactNode }) {
             ) : (
               // If it IS a subscription page, render children directly in a full-width container.
               // No sidebar or inset needed here.
-              <div className="relative flex min-h-screen flex-col bg-neutral-900 p-4 md:p-8">
+              <div className="relative flex min-h-screen flex-col bg-background p-4 md:p-8">
                 {children}
               </div>
             )}

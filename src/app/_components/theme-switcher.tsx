@@ -1,45 +1,71 @@
-// src/components/ThemeSwitcher.tsx
-"use client"; // Important: Mark as client component
+"use client";
 
 import React from "react";
 import { useTheme } from "~/app/_components/theme-context";
-import { themeEnum } from "~/server/db/schema"; // Import for types
+import { themeEnum } from "~/server/db/schema";
+import { Sun, Moon, Palette } from "lucide-react";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "~/components/ui/dropdown-menu";
+import { Button } from "~/components/ui/button";
 
 export const ThemeSwitcher: React.FC = () => {
   const { theme, setTheme } = useTheme();
 
+  const getThemeIcon = () => {
+    switch (theme) {
+      case "light":
+        return <Sun className="h-4 w-4" />;
+      case "dark":
+        return <Moon className="h-4 w-4" />;
+      case "boring":
+        return <Palette className="h-4 w-4" />;
+      default:
+        return <Sun className="h-4 w-4" />;
+    }
+  };
+
+  const getThemeLabel = (themeValue: string) => {
+    switch (themeValue) {
+      case "light":
+        return "Light";
+      case "dark":
+        return "Dark";
+      case "boring":
+        return "Boring";
+      default:
+        return "Light";
+    }
+  };
+
   return (
-    <div className="flex gap-2">
-      <button
-        onClick={() => setTheme(themeEnum.enumValues[0])} // "light"
-        className={`rounded px-4 py-2 ${
-          theme === themeEnum.enumValues[0]
-            ? "bg-primary text-white"
-            : "bg-gray-200 text-gray-800"
-        }`}
-      >
-        Light
-      </button>
-      <button
-        onClick={() => setTheme(themeEnum.enumValues[1])} // "dark"
-        className={`rounded px-4 py-2 ${
-          theme === themeEnum.enumValues[1]
-            ? "bg-primary text-white"
-            : "bg-gray-200 text-gray-800"
-        }`}
-      >
-        Dark
-      </button>
-      <button
-        onClick={() => setTheme(themeEnum.enumValues[2])} // "boring"
-        className={`rounded px-4 py-2 ${
-          theme === themeEnum.enumValues[2]
-            ? "bg-primary text-white"
-            : "bg-gray-200 text-gray-800"
-        }`}
-      >
-        Boring
-      </button>
-    </div>
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button variant="outline" size="sm" className="w-9 px-0">
+          {getThemeIcon()}
+          <span className="sr-only">Toggle theme</span>
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end">
+        {themeEnum.enumValues.map((themeValue) => (
+          <DropdownMenuItem
+            key={themeValue}
+            onClick={() => setTheme(themeValue)}
+            className="flex items-center gap-2"
+          >
+            {themeValue === "light" && <Sun className="h-4 w-4" />}
+            {themeValue === "dark" && <Moon className="h-4 w-4" />}
+            {themeValue === "boring" && <Palette className="h-4 w-4" />}
+            <span>{getThemeLabel(themeValue)}</span>
+            {theme === themeValue && (
+              <span className="ml-auto text-xs">✓</span>
+            )}
+          </DropdownMenuItem>
+        ))}
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 };

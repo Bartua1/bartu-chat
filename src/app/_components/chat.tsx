@@ -1,7 +1,7 @@
 'use client';
 // ChatComponent.tsx
 import { useState, useEffect, useRef } from 'react';
-import { FaFileUpload, FaPlay, FaImage } from 'react-icons/fa';
+import { FaFileUpload, FaPlay, FaImage, FaFile, FaTimes } from 'react-icons/fa';
 import { IoAddCircleSharp } from "react-icons/io5";
 import { useAuth, useUser } from '@clerk/nextjs';
 import { useParams } from 'next/navigation';
@@ -21,6 +21,7 @@ import { Badge } from "~/components/ui/badge"
 import { Skeleton } from "~/components/ui/skeleton"
 import { useToast } from "~/hooks/use-toast"
 import { toast } from "sonner"
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "~/components/ui/dialog"
 
 import {
   Collapsible,
@@ -57,12 +58,22 @@ interface StyleOption {
   description: string;
 }
 
+interface Attachment {
+  id: number;
+  fileName: string;
+  fileType: string;
+  fileSize: number;
+  url: string;
+  content?: string;
+}
+
 interface Message {
   role: 'system' | 'user' | 'assistant';
   content: string;
   partial?: boolean;
   tokensPerSecond?: number;
   thinking?: string | null;
+  attachments?: Attachment[];
 }
 
 export function ChatComponent() {
@@ -71,23 +82,26 @@ export function ChatComponent() {
   const params = useParams();
   const chatUrlFromParams = params.chatUrl;
   const [newChat, setNewChat] = useState(true);
-  const [chatName, setChatName] = useState(null);
-  const [chatId, setChatId] = useState(null);
+  const [chatName, setChatName] = useState<string | null>(null);
+  const [chatId, setChatId] = useState<string | null>(null);
   const [open, setOpen] = useState(false);
   const [message, setMessage] = useState('');
   const [messages, setMessages] = useState<Message[]>([]);
   const [models, setModels] = useState<Model[]>([]);
   const [selectedModel, setSelectedModel] = useState('');
   const [loadingModels, setLoadingModels] = useState(true);
-  const [modelError, setModelError] = useState(null);
+  const [modelError, setModelError] = useState<string | null>(null);
   const [loadingResponse, setLoadingResponse] = useState(false);
-  const [responseError, setResponseError] = useState(null);
+  const [responseError, setResponseError] = useState<string | null>(null);
   const [tokensPerSecond, setTokensPerSecond] = useState(0);
-  const [startTime, setStartTime] = useState(null);
+  const [startTime, setStartTime] = useState<number | null>(null);
   const [totalTokens, setTotalTokens] = useState(0);
   const [systemInstructions, setSystemInstructions] = useState("You are a helpful assistant. Keep your responses concise.");
   const [copiedCode, setCopiedCode] = useState<string | null>(null);
   const [streamingResponse, setStreamingResponse] = useState<ReadableStreamDefaultReader<Uint8Array> | null>(null);
+  const [attachments, setAttachments] = useState<Attachment[]>([]);
+  const [showPreview, setShowPreview] = useState<Attachment | null>(null);
+  const [copiedAttachment, setCopiedAttachment] = useState<number | null>(null);
 
   const chatContainerRef = useRef<HTMLDivElement>(null);
   const { toast: useToastHook } = useToast();
@@ -100,7 +114,7 @@ export function ChatComponent() {
     { value: "Formal", label: "Formal", description: "Professional and polite" },
   ];
 
-  const [selectedStyle, setSelectedStyle] = useState(styleOptions[0].value);
+  const [selectedStyle, setSelectedStyle] = useState(styleOptions[0]?.value ?? 'Normal');
 
   useEffect(() => {
     // Initialize the messages with the system instruction
@@ -119,7 +133,7 @@ export function ChatComponent() {
           throw new Error(`HTTP error! status: ${response.status}`);
         }
         
-        const data = await response.json();
+        const data = await response.json() as Model[];
 
         if (data && Array.isArray(data)) {
           setModels(data);
@@ -184,7 +198,7 @@ export function ChatComponent() {
 
   useEffect(() => {
     const loadPreviousMessages = async () => {
-      if (chatUrlFromParams) {
+      if (chatUrlFromParams && typeof chatUrlFromParams === 'string') {
         setLoadingResponse(true);
         setNewChat(false);
         setChatId(chatUrlFromParams);
@@ -196,9 +210,9 @@ export function ChatComponent() {
             throw new Error(`HTTP error! status: ${response.status}`);
           }
           
-          const data = await response.json() as any[];
+          const data = await response.json() as { content: string; sender: 'user' | 'assistant' }[];
 
-          const formattedMessages = data.map(msg => {
+          const formattedMessages: Message[] = data.map(msg => {
             const { thinking, answer } = extractThinking(msg.content);
             return {
               role: msg.sender === 'user' ? 'user' : 'assistant',
@@ -247,14 +261,162 @@ export function ChatComponent() {
     return { code: null, language: undefined };
   };
 
+  // Function to detect if pasted content is > 50 lines and create attachment
+  const handlePaste = async (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+    const pastedText = e.clipboardData.getData('text');
+    const lineCount = pastedText.split('\n').length;
+    
+    if (lineCount > 50) {
+      e.preventDefault();
+      
+      // Create a text file attachment
+      const timestamp = Date.now();
+      const fileName = `text_${timestamp}.txt`;
+      const blob = new Blob([pastedText], { type: 'text/plain' });
+      const file = new File([blob], fileName, { type: 'text/plain' });
+      
+      // Create form data and upload
+      const formData = new FormData();
+      formData.append('file', file);
+      formData.append('fileName', fileName);
+      formData.append('messageId', '0'); // Temporary messageId, will be updated when message is created
+      
+      try {
+        const response = await fetch('/api/attachments', {
+          method: 'POST',
+          body: formData,
+        });
+        
+        if (response.ok) {
+          const attachment = await response.json() as Attachment;
+          setAttachments(prev => [...prev, attachment]);
+          toast.success(`Large text content (${lineCount} lines) saved as ${fileName}`);
+        } else {
+          throw new Error('Failed to save attachment');
+        }
+      } catch (error) {
+        console.error('Error creating attachment:', error);
+        toast.error('Failed to save large text content as attachment');
+        // Fall back to normal paste behavior
+        setMessage(prev => prev + pastedText);
+      }
+    }
+  };
+
   const handleFileUpload = () => {
-    console.log('File upload functionality to be implemented');
-    toast.info("File upload functionality to be implemented");
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = '.txt,.md,.json,.js,.ts,.py,.html,.css,.xml,.yaml,.yml';
+    input.onchange = async (e) => {
+      const file = (e.target as HTMLInputElement).files?.[0];
+      if (!file) return;
+      
+      const formData = new FormData();
+      formData.append('file', file);
+      formData.append('fileName', file.name);
+      formData.append('messageId', '0');
+      
+      try {
+        const response = await fetch('/api/attachments', {
+          method: 'POST',
+          body: formData,
+        });
+        
+        if (response.ok) {
+          const attachment = await response.json() as Attachment;
+          setAttachments(prev => [...prev, attachment]);
+          toast.success(`File ${file.name} attached successfully`);
+        } else {
+          throw new Error('Failed to upload file');
+        }
+      } catch (error) {
+        console.error('Error uploading file:', error);
+        toast.error('Failed to upload file');
+      }
+    };
+    input.click();
   };
 
   const handleImageUpload = () => {
     console.log('Image upload functionality to be implemented');
     toast.info("Image upload functionality to be implemented");
+  };
+
+  const removeAttachment = (id: number) => {
+    setAttachments(prev => prev.filter(att => att.id !== id));
+  };
+
+  const previewAttachment = async (attachment: Attachment) => {
+    console.log('Preview attachment clicked:', attachment);
+    try {
+      const response = await fetch(`/api/attachments/${attachment.id}/content`);
+      console.log('API response status:', response.status);
+      
+      if (response.ok) {
+        const data = await response.json() as Attachment;
+        console.log('Received data:', data);
+        setShowPreview({ ...attachment, content: data.content });
+      } else {
+        const errorText = await response.text();
+        console.error('API error:', errorText);
+        toast.error('Failed to load file preview');
+      }
+    } catch (error) {
+      console.error('Error loading preview:', error);
+      toast.error('Failed to load file preview');
+    }
+  };
+
+  const copyToClipboard = async (text: string): Promise<boolean> => {
+    try {
+      // Try the modern clipboard API first
+      if (navigator.clipboard && window.isSecureContext) {
+        await navigator.clipboard.writeText(text);
+        return true;
+      } else {
+        // Fallback for older browsers or non-secure contexts
+        const textArea = document.createElement('textarea');
+        textArea.value = text;
+        textArea.style.position = 'fixed';
+        textArea.style.left = '-999999px';
+        textArea.style.top = '-999999px';
+        document.body.appendChild(textArea);
+        textArea.focus();
+        textArea.select();
+        const copied = document.execCommand('copy');
+        document.body.removeChild(textArea);
+        return copied;
+      }
+    } catch (error) {
+      console.error('Copy to clipboard failed:', error);
+      return false;
+    }
+  };
+
+  const copyAttachmentContent = async (attachment: Attachment) => {
+    try {
+      const response = await fetch(`/api/attachments/${attachment.id}/content`);
+      if (response.ok) {
+        const data = await response.json() as Attachment;
+        if (data.content) {
+          const success = await copyToClipboard(data.content);
+          if (success) {
+            setCopiedAttachment(attachment.id);
+            toast.success(`Copied ${attachment.fileName} content to clipboard`);
+            setTimeout(() => {
+              setCopiedAttachment(null);
+            }, 2000);
+          } else {
+            toast.error('Failed to copy to clipboard');
+          }
+        }
+      } else {
+        toast.error('Failed to load file content');
+      }
+    } catch (error) {
+      console.error('Error copying attachment content:', error);
+      toast.error('Failed to copy file content');
+    }
   };
 
   // Function to process the streaming response
@@ -280,14 +442,15 @@ export function ChatComponent() {
             if (data === '[DONE]') continue;
             
             try {
-              const parsedData = JSON.parse(data);
-              if (parsedData.choices && parsedData.choices[0] && parsedData.choices[0].delta && parsedData.choices[0].delta.content) {
-                const text = parsedData.choices[0].delta.content;
+              const parsedData = JSON.parse(data) as { choices?: { delta?: { content?: string } }[] };
+              const content = parsedData.choices?.[0]?.delta?.content;
+              if (content) {
+                const text = content;
                 fullReply += text;
                 currentTokenCount += 1;
                 setTotalTokens(prevTotalTokens => prevTotalTokens + 1);
 
-                const elapsedTime = (Date.now() - startTime!) / 1000;
+                const elapsedTime = (Date.now() - (startTime ?? Date.now())) / 1000;
                 tps = currentTokenCount / elapsedTime;
                 setTokensPerSecond(tps);
 
@@ -334,20 +497,22 @@ export function ChatComponent() {
   };
 
   const handleSendMessage = async () => {
-    if (message.trim() !== '') {
+    if (message.trim() !== '' || attachments.length > 0) {
       let currentChatId: string | null = chatId;
       let userMessageContent = message;
 
       if (selectedStyle && selectedStyle !== "Normal") {
-        const styleDescription = styleOptions.find(option => option.value === selectedStyle)?.description || selectedStyle;
+        const styleDescription = styleOptions.find(option => option.value === selectedStyle)?.description ?? selectedStyle;
         userMessageContent += `\n\n Please respond in a ${selectedStyle.toLowerCase()} style. (${styleDescription})`;
       }
 
-      const userMessage: Message = { role: 'user', content: userMessageContent };
+      const userMessage: Message = { role: 'user', content: userMessageContent, attachments: [...attachments] };
 
       try {
         setMessages(prevMessages => [...prevMessages, userMessage]);
         setMessage('');
+        const currentAttachments = [...attachments];
+        setAttachments([]);
         setLoadingResponse(true);
 
         if (newChat && !chatUrlFromParams) {
@@ -368,7 +533,7 @@ export function ChatComponent() {
               throw new Error(`HTTP error! status: ${titleResponse.status}`);
             }
 
-            const titleData = await titleResponse.json();
+            const titleData = await titleResponse.json() as { title?: string };
             const title = titleData.title ?? `chat - ${new Date().toISOString()}`;
             setChatName(title);
 
@@ -386,19 +551,21 @@ export function ChatComponent() {
             }
 
             const chat = await response.json() as { url: string }[];
-            currentChatId = chat[0].url;
+            currentChatId = chat[0]?.url ?? null;
             setChatId(currentChatId);
             setNewChat(false);
 
             // Add the new chat to the context
-            const newChatObject = {
-              id: Date.now(),
-              name: title,
-              userId: userId!,
-              url: currentChatId
-            };
+            if (currentChatId) {
+              const newChatObject = {
+                id: Date.now(),
+                name: title,
+                userId: userId!,
+                url: currentChatId
+              };
 
-            addChat(newChatObject);
+              addChat(newChatObject);
+            }
           } catch (error: unknown) {
             const errorMessage = error instanceof Error ? error.message : "Unknown error";
             console.error("Could not create chat:", error);
@@ -427,6 +594,7 @@ export function ChatComponent() {
 
         // Save user message to database
         if (currentChatId) {
+          const attachmentIds = currentAttachments.map(att => att.id);
           await fetch('/api/uploadmessage', {
             method: 'POST',
             headers: {
@@ -437,7 +605,8 @@ export function ChatComponent() {
               model: selectedModel, 
               userId: userId!, 
               content: message, 
-              sender: 'user' 
+              sender: 'user',
+              attachmentIds 
             }),
           });
         }
@@ -456,6 +625,7 @@ export function ChatComponent() {
             ],
             model: selectedModel,
             stream: true,
+            attachments: currentAttachments,
           }),
         });
 
@@ -513,60 +683,71 @@ export function ChatComponent() {
   useEffect(() => {
     return () => {
       if (streamingResponse) {
-        streamingResponse.cancel("Component unmounted or operation cancelled");
+        void streamingResponse.cancel("Component unmounted or operation cancelled");
       }
     };
   }, [streamingResponse]);
 
-  const handleCopyCode = (code: string) => {
-    navigator.clipboard.writeText(code)
-      .then(() => {
-        setCopiedCode(code);
-        setTimeout(() => {
-          setCopiedCode(null); // Reset after a short delay
-        }, 2000);
-      })
-      .catch(err => {
-        console.error("Failed to copy code: ", err);
-        useToastHook({
-          title: "Error copying code",
-          description: "Failed to copy code to clipboard.",
-          variant: "destructive",
-        });
-      });
+  const handleCopyCode = async (code: string) => {
+    const success = await copyToClipboard(code);
+    if (success) {
+      setCopiedCode(code);
+      setTimeout(() => {
+        setCopiedCode(null); // Reset after a short delay
+      }, 2000);
+    } else {
+      console.error("Failed to copy code");
+      toast.error("Failed to copy code to clipboard");
+    }
   };
 
   return (
-    <div className="flex flex-col h-screen">
+    <div className="flex flex-col h-screen bg-gradient-to-br from-background to-muted/20">
       {/* Top Bar */}
-      <Card className="border-0 shadow-none bg-transparent">
-        <CardHeader className="pb-2 flex flex-row justify-between items-center">
-          <CardTitle>Chat</CardTitle>
-        </CardHeader>
-        <CardContent className="p-2">
-          <Collapsible className="border-slate-200 border p-4 rounded-md">
-            <CollapsibleTrigger>
-              <Label className='cursor-pointer' htmlFor="systemInstructions">System Instructions</Label>
+      <div className="border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
+        <div className="p-4">
+          <div className="flex flex-row justify-between items-center mb-4">
+            <h1 className="text-2xl font-semibold tracking-tight">Chat</h1>
+            <div className="flex items-center gap-2">
+              {tokensPerSecond > 0 && (
+                <Badge variant="outline" className="text-xs">
+                  {tokensPerSecond.toFixed(1)} tok/s
+                </Badge>
+              )}
+            </div>
+          </div>
+          
+          <Collapsible className="border rounded-lg bg-card/50 backdrop-blur">
+            <CollapsibleTrigger className="w-full p-3 text-left hover:bg-muted/50 transition-colors rounded-lg">
+              <div className="flex items-center justify-between">
+                <Label className="cursor-pointer font-medium">System Instructions</Label>
+                <ChevronsUpDown className="h-4 w-4" />
+              </div>
             </CollapsibleTrigger>
-            <CollapsibleContent className="p-2">
+            <CollapsibleContent className="p-3 pt-0">
               <Textarea
                 id="systemInstructions"
-                className="w-full"
-                placeholder="Optional tone and style instructions for the model"
+                className="w-full min-h-[80px] resize-none border-0 bg-transparent focus-visible:ring-1"
+                placeholder="Define the AI's behavior, tone, and expertise..."
+                value={systemInstructions}
                 onChange={(e) => setSystemInstructions(e.target.value)}
               />
             </CollapsibleContent>
           </Collapsible>
-        </CardContent>
-      </Card>
+        </div>
+      </div>
 
       {/* Middle Section (Conversation History) */}
-      <div className="flex-grow">
-        <ScrollArea className="h-full p-4">
-          <div ref={chatContainerRef}>
+      <div className="flex-1 overflow-hidden">
+        <ScrollArea className="h-full">
+          <div ref={chatContainerRef} className="p-4 space-y-6">
             {newChat && messages.length === 1 && (
-              <div className="text-center text-muted-foreground flex items-center justify-center h-full text-3xl">
-                <p>Yo {user?.fullName ?? "test"}! Start chatting down below.</p>
+              <div className="flex items-center justify-center h-[60vh]">
+                <div className="text-center space-y-4">
+                  <div className="text-6xl">💬</div>
+                  <h2 className="text-2xl font-semibold">Hey {user?.firstName ?? "there"}!</h2>
+                  <p className="text-muted-foreground text-lg">What would you like to chat about today?</p>
+                </div>
               </div>
             )}
 
@@ -576,196 +757,359 @@ export function ChatComponent() {
               const isCodeResponse = msg.role === 'assistant' && code !== null;
 
               return (
-                <div key={index} className={`mb-2 ${isUser ? 'text-right' : 'text-left'}`}>
-                  {/* Thinking Section - Conditionally Rendered */}
+                <div key={index} className="space-y-2">
+                  {/* Thinking Section */}
                   {msg.role === 'assistant' && msg.thinking && (
-                    <Collapsible className="mb-2">
-                      <CollapsibleTrigger>
-                        <Badge variant="secondary">Model is thinking...</Badge>
-                      </CollapsibleTrigger>
-                      <CollapsibleContent className="p-2 text-sm text-muted-foreground">
-                        {msg.thinking}
-                      </CollapsibleContent>
-                    </Collapsible>
-                  )}
-
-                  {/* Main Message Content */}
-                  {isCodeResponse ? (
-                    <div className="relative">
-                      <CodeBlock
-                        text={code!} // code is guaranteed to be non-null here
-                        language={language || "javascript"}
-                        theme={dracula}
-                        showLineNumbers={true}
-                      />
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        className="absolute top-2 right-2 text-gray-400 hover:text-gray-100"
-                        onClick={() => handleCopyCode(code!)}
-                      >
-                        {copiedCode === code ? (
-                          <CheckCircle className="h-4 w-4" />
-                        ) : (
-                          <Copy className="h-4 w-4" />
-                        )}
-                      </Button>
+                    <div className="flex justify-start">
+                      <Collapsible className="max-w-[80%]">
+                        <CollapsibleTrigger asChild>
+                          <Button variant="ghost" size="sm" className="h-auto p-2 text-xs">
+                            <Badge variant="secondary" className="mr-2">🤔 Thinking</Badge>
+                            <ChevronsUpDown className="h-3 w-3" />
+                          </Button>
+                        </CollapsibleTrigger>
+                        <CollapsibleContent className="mt-2">
+                          <div className="bg-muted/50 rounded-lg p-3 text-sm text-muted-foreground border-l-4 border-muted-foreground/30">
+                            <pre className="whitespace-pre-wrap font-mono text-xs">{msg.thinking}</pre>
+                          </div>
+                        </CollapsibleContent>
+                      </Collapsible>
                     </div>
-                  ) : (
-                    <Badge
-                      variant={isUser ? "secondary" : "default"}
-                      className={`inline-block p-2 rounded-md ${isUser ? 'bg-secondary text-secondary-foreground' : 'bg-slate-700 text-slate-200 text-sm'}`}
-                    >
-                      {msg.content}
-                    </Badge>
                   )}
 
-                  {/* Tokens Per Second - Conditionally Rendered */}
-                  {msg.role === 'assistant' && (
-                    (msg.tokensPerSecond || msg.content) ? (
-                      <>
-                        {msg.tokensPerSecond ? `${msg.tokensPerSecond.toFixed(2)} tokens/s` : ''}
-                      </>
-                    ) : null
+                  {/* Attachments */}
+                  {msg.attachments && msg.attachments.length > 0 && (
+                    <div className={`flex ${isUser ? 'justify-end' : 'justify-start'}`}>
+                      <div className={`max-w-[80%] ${isUser ? 'order-2 mr-4' : 'order-1 ml-4'}`}>
+                        <div className="flex flex-wrap gap-2 mb-2">
+                          {msg.attachments.map((attachment) => (
+                            <Button
+                              key={attachment.id}
+                              variant="outline"
+                              size="sm"
+                              className="h-auto p-2 text-xs"
+                              onClick={() => previewAttachment(attachment)}
+                            >
+                              <FaFile className="h-3 w-3 mr-1" />
+                              {attachment.fileName}
+                            </Button>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
                   )}
+
+                  {/* Main Message Bubble */}
+                  <div className={`flex ${isUser ? 'justify-end' : 'justify-start'}`}>
+                    <div className={`max-w-[80%] ${isUser ? 'order-2' : 'order-1'}`}>
+                      {isCodeResponse ? (
+                        <div className="relative bg-card border rounded-lg overflow-hidden shadow-sm">
+                          <div className="flex items-center justify-between bg-muted/50 px-3 py-2 border-b">
+                            <span className="text-xs font-medium text-muted-foreground">
+                              {language ?? 'Code'}
+                            </span>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className="h-6 w-6 p-0"
+                              onClick={() => handleCopyCode(code!)}
+                            >
+                              {copiedCode === code ? (
+                                <CheckCircle className="h-3 w-3 text-green-500" />
+                              ) : (
+                                <Copy className="h-3 w-3" />
+                              )}
+                            </Button>
+                          </div>
+                          <div className="p-0">
+                            <CodeBlock
+                              text={code!}
+                              language={language ?? "javascript"}
+                              theme={dracula}
+                              showLineNumbers={true}
+                            />
+                          </div>
+                        </div>
+                      ) : (
+                        <div
+                          className={`rounded-2xl px-4 py-3 shadow-sm ${
+                            isUser
+                              ? 'bg-primary text-primary-foreground ml-4'
+                              : 'bg-card border mr-4'
+                          }`}
+                        >
+                          <div className="prose prose-sm dark:prose-invert max-w-none">
+                            <p className="whitespace-pre-wrap m-0 leading-relaxed">
+                              {msg.content}
+                            </p>
+                          </div>
+                        </div>
+                      )}
+                      
+                      {/* Message metadata */}
+                      <div className={`mt-1 text-xs text-muted-foreground ${isUser ? 'text-right mr-4' : 'text-left ml-4'}`}>
+                        {msg.role === 'assistant' && msg.tokensPerSecond && (
+                          <span>{msg.tokensPerSecond.toFixed(1)} tok/s</span>
+                        )}
+                        {msg.partial && <span className="animate-pulse"> • Generating...</span>}
+                      </div>
+                    </div>
+                  </div>
                 </div>
               );
             })}
 
+            {/* Loading state */}
             {loadingResponse && (
-              <div className="text-left">
-                <Badge variant="outline" className="inline-block p-2 rounded-md bg-slate-800 text-slate-200">
-                  Thinking...
-                </Badge>
+              <div className="flex justify-start">
+                <div className="bg-card border rounded-2xl px-4 py-3 mr-4 shadow-sm">
+                  <div className="flex items-center space-x-2">
+                    <div className="flex space-x-1">
+                      <div className="w-2 h-2 bg-muted-foreground rounded-full animate-bounce"></div>
+                      <div className="w-2 h-2 bg-muted-foreground rounded-full animate-bounce" style={{ animationDelay: '0.1s' }}></div>
+                      <div className="w-2 h-2 bg-muted-foreground rounded-full animate-bounce" style={{ animationDelay: '0.2s' }}></div>
+                    </div>
+                    <span className="text-sm text-muted-foreground">AI is thinking...</span>
+                  </div>
+                </div>
               </div>
             )}
 
+            {/* Error state */}
             {responseError && (
-              <div className="text-left">
-                <Badge variant="destructive" className="inline-block p-2 rounded-md bg-destructive text-destructive-foreground">
-                  Error: {responseError}
-                </Badge>
+              <div className="flex justify-start">
+                <div className="bg-destructive/10 border border-destructive/20 rounded-2xl px-4 py-3 mr-4">
+                  <p className="text-sm text-destructive">⚠️ {responseError}</p>
+                </div>
               </div>
             )}
           </div>
         </ScrollArea>
       </div>
 
-      {/* Bottom Bar (Input area) */}
-      <Card className="border-0 shadow-none bg-transparent">
-        <CardContent className="p-4">
-          {/* Model Selection Dropdown */}
-          {loadingModels && (
-            <div className="flex gap-2">
-              <Skeleton className="h-4 w-[100px]" />
-            </div>
-          )}
-          {modelError && <p className="text-red-500">{modelError}</p>}
-
-          {!loadingModels && !modelError && (
-            <div className="mb-4">
-              <Label htmlFor="modelSelect">Select Model:</Label>
-              <Popover open={open} onOpenChange={setOpen}>
-                <PopoverTrigger asChild>
+      {/* Bottom Bar (Input area) - New Compact Layout */}
+      <div className="border-t bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
+        <div className="p-4 space-y-3">
+          {/* Attachments Preview */}
+          {attachments.length > 0 && (
+            <div className="flex flex-wrap gap-2">
+              {attachments.map((attachment) => (
+                <div key={attachment.id} className="flex items-center gap-1 bg-muted/50 rounded-lg px-2 py-1 text-xs">
+                  <FaFile className="h-3 w-3" />
+                  <span className="truncate max-w-[100px]">{attachment.fileName}</span>
                   <Button
-                    variant="outline"
-                    role="combobox"
-                    aria-expanded={open}
-                    className="w-full justify-between"
+                    variant="ghost"
+                    size="sm"
+                    className="h-4 w-4 p-0 hover:bg-muted"
+                    onClick={() => previewAttachment(attachment)}
+                    title="Preview file"
                   >
-                    {selectedModel
-                      ? models.find((model) => model.id === selectedModel)?.id
-                      : "Select a model..."}
-                    <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+                    <FaFile className="h-2 w-2" />
                   </Button>
-                </PopoverTrigger>
-                <PopoverContent className="w-full p-0">
-                  <Command>
-                    <CommandInput placeholder="Search model..." />
-                    <CommandList>
-                      <CommandEmpty>No model found.</CommandEmpty>
-                      <CommandGroup>
-                        {models.map((model) => (
-                          <CommandItem
-                            key={model.id}
-                            value={model.id}
-                            onSelect={(currentValue) => {
-                              setSelectedModel(currentValue === selectedModel ? "" : currentValue)
-                              setOpen(false)
-                            }}
-                          >
-                            <Check
-                              className="mr-2 h-4 w-4"
-                              style={{ visibility: selectedModel === model.id ? 'visible' : 'hidden' }}
-                            />
-                            {model.id}
-                          </CommandItem>
-                        ))}
-                      </CommandGroup>
-                    </CommandList>
-                  </Command>
-                </PopoverContent>
-              </Popover>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-4 w-4 p-0 hover:bg-muted"
+                    onClick={() => copyAttachmentContent(attachment)}
+                    title="Copy content"
+                  >
+                    {copiedAttachment === attachment.id ? (
+                      <CheckCircle className="h-2 w-2 text-green-500" />
+                    ) : (
+                      <Copy className="h-2 w-2" />
+                    )}
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-4 w-4 p-0 hover:bg-destructive/50"
+                    onClick={() => removeAttachment(attachment.id)}
+                    title="Remove attachment"
+                  >
+                    <FaTimes className="h-2 w-2" />
+                  </Button>
+                </div>
+              ))}
             </div>
           )}
-          {/* Choose Style Dropdown */}
-          <div className="mb-4">
-            <Label htmlFor="styleSelect">Choose Style:</Label>
-            <Select onValueChange={setSelectedStyle}>
-              <SelectTrigger className="w-full">
-                <SelectValue placeholder="Select a style" />
-              </SelectTrigger>
-              <SelectContent>
-                {styleOptions.map((style) => (
-                  <SelectItem key={style.value} value={style.value}>
-                    {style.label}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-          <div className="flex items-center space-x-2">
-            <Input
-              type="text"
-              placeholder="How can we help you today?"
-              value={message}
-              onChange={(e) => setMessage(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' && !loadingResponse) {
-                  void handleSendMessage();
-                }
-              }}
-              disabled={Boolean(loadingModels ?? modelError ?? loadingResponse)}
-              className="flex-grow" // Make input take available space
-            />
-            <Button
-              type="button"
-              onClick={handleFileUpload}
-              variant="secondary"
-              disabled={loadingResponse}
-              title="Upload File"
-            >
-              <IoAddCircleSharp className="h-4 w-4" />
-            </Button>
-            <Button
-              type="button"
-              onClick={handleImageUpload}
-              variant="secondary"
-              disabled={loadingResponse}
-              title="Upload Image"
-            >
-              <FaImage className="h-4 w-4" />
-            </Button>
+
+          {/* Input Area */}
+          <div className="flex items-end space-x-3">
+            <div className="flex-1 relative">
+              <Textarea
+                placeholder="Type your message here..."
+                value={message}
+                onChange={(e) => setMessage(e.target.value)}
+                onPaste={handlePaste}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && !e.shiftKey && !loadingResponse) {
+                    e.preventDefault();
+                    void handleSendMessage();
+                  }
+                }}
+                disabled={Boolean(loadingModels ?? modelError ?? loadingResponse)}
+                className="min-h-[60px] max-h-32 resize-none bg-background/50 border-muted-foreground/20 focus:border-primary/50 pr-20"
+                rows={2}
+              />
+              
+              {/* Attach buttons */}
+              <div className="absolute right-2 bottom-2 flex space-x-1">
+                <Button
+                  type="button"
+                  onClick={handleFileUpload}
+                  variant="ghost"
+                  size="sm"
+                  disabled={loadingResponse}
+                  className="h-8 w-8 p-0 hover:bg-muted/50"
+                  title="Upload File"
+                >
+                  <IoAddCircleSharp className="h-4 w-4" />
+                </Button>
+                <Button
+                  type="button"
+                  onClick={handleImageUpload}
+                  variant="ghost"
+                  size="sm"
+                  disabled={loadingResponse}
+                  className="h-8 w-8 p-0 hover:bg-muted/50"
+                  title="Upload Image"
+                >
+                  <FaImage className="h-4 w-4" />
+                </Button>
+              </div>
+            </div>
+            
             <Button
               onClick={handleSendMessage}
-              disabled={loadingResponse}
-              title="Send Message"
+              disabled={loadingResponse || (!message.trim() && attachments.length === 0)}
+              size="lg"
+              className="h-[60px] px-6 bg-primary hover:bg-primary/90"
             >
-              <FaPlay className="h-4 w-4" />
+              {loadingResponse ? (
+                <div className="w-4 h-4 border-2 border-current border-t-transparent rounded-full animate-spin" />
+              ) : (
+                <FaPlay className="h-4 w-4" />
+              )}
             </Button>
           </div>
-        </CardContent>
-      </Card>
+
+          {/* Model and Style Selection - Below Input */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            {/* Model Selection */}
+            {loadingModels ? (
+              <div className="space-y-1">
+                <Skeleton className="h-3 w-16" />
+                <Skeleton className="h-8 w-full" />
+              </div>
+            ) : modelError ? (
+              <div className="text-destructive text-xs">{modelError}</div>
+            ) : (
+              <div className="space-y-1">
+                <Label className="text-xs font-medium text-muted-foreground">Model</Label>
+                <Popover open={open} onOpenChange={setOpen}>
+                  <PopoverTrigger asChild>
+                    <Button
+                      variant="outline"
+                      role="combobox"
+                      aria-expanded={open}
+                      className="w-full justify-between bg-background/50 h-8 text-xs"
+                    >
+                      <span className="truncate">
+                        {selectedModel || "Select model..."}
+                      </span>
+                      <ChevronsUpDown className="ml-2 h-3 w-3 shrink-0 opacity-50" />
+                    </Button>
+                  </PopoverTrigger>
+                  <PopoverContent className="w-full p-0" align="start">
+                    <Command>
+                      <CommandInput placeholder="Search models..." />
+                      <CommandList>
+                        <CommandEmpty>No model found.</CommandEmpty>
+                        <CommandGroup>
+                          {models.map((model) => (
+                            <CommandItem
+                              key={model.id}
+                              value={model.id}
+                              onSelect={(currentValue) => {
+                                setSelectedModel(currentValue === selectedModel ? "" : currentValue)
+                                setOpen(false)
+                              }}
+                            >
+                              <Check
+                                className="mr-2 h-4 w-4"
+                                style={{ visibility: selectedModel === model.id ? 'visible' : 'hidden' }}
+                              />
+                              {model.id}
+                            </CommandItem>
+                          ))}
+                        </CommandGroup>
+                      </CommandList>
+                    </Command>
+                  </PopoverContent>
+                </Popover>
+              </div>
+            )}
+
+            {/* Style Selection */}
+            <div className="space-y-1">
+              <Label className="text-xs font-medium text-muted-foreground">Style</Label>
+              <Select value={selectedStyle} onValueChange={setSelectedStyle}>
+                <SelectTrigger className="bg-background/50 h-8 text-xs">
+                  <SelectValue placeholder="Select style" />
+                </SelectTrigger>
+                <SelectContent>
+                  {styleOptions.map((style) => (
+                    <SelectItem key={style.value} value={style.value}>
+                      <div>
+                        <div className="font-medium text-xs">{style.label}</div>
+                        <div className="text-xs text-muted-foreground">{style.description}</div>
+                      </div>
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* File Preview Dialog */}
+      <Dialog open={!!showPreview} onOpenChange={() => setShowPreview(null)}>
+        <DialogContent className="max-w-4xl max-h-[80vh] overflow-hidden">
+          <DialogHeader>
+            <DialogTitle className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <FaFile className="h-4 w-4" />
+                {showPreview?.fileName ?? 'File Preview'}
+              </div>
+              {showPreview && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => copyAttachmentContent(showPreview)}
+                  className="h-8 px-3"
+                >
+                  {copiedAttachment === showPreview.id ? (
+                    <>
+                      <CheckCircle className="h-3 w-3 mr-1 text-green-500" />
+                      Copied
+                    </>
+                  ) : (
+                    <>
+                      <Copy className="h-3 w-3 mr-1" />
+                    </>
+                  )}
+                </Button>
+              )}
+            </DialogTitle>
+          </DialogHeader>
+          <ScrollArea className="h-[60vh] w-full">
+            <pre className="whitespace-pre-wrap text-sm p-4 bg-muted/50 rounded-lg">
+              {showPreview?.content ?? 'Loading...'}
+            </pre>
+          </ScrollArea>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

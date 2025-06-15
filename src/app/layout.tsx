@@ -5,6 +5,7 @@ import "~/styles/globals.css";
 import { Toaster } from "react-hot-toast";
 // CORRECTED IMPORT PATH for LayoutContent
 import { LayoutContent } from "~/app/_components/layout-content";
+import { ThemeProvider } from "~/app/_components/theme-context";
 
 const inter = Inter({ subsets: ["latin"] });
 
@@ -18,10 +19,12 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
     <ClerkProvider>
       <html lang="en">
         <body className={inter.className}>
-          <LayoutContent>
-            {children}
-          </LayoutContent>
-          <Toaster position="bottom-right" />
+          <ThemeProvider>
+            <LayoutContent>
+              {children}
+            </LayoutContent>
+            <Toaster position="bottom-right" />
+          </ThemeProvider>
         </body>
       </html>
     </ClerkProvider>

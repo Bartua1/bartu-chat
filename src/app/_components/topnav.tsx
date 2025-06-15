@@ -6,6 +6,7 @@ import { useRouter } from 'next/navigation'; // Import useRouter
 import Link from 'next/link';
 import { Menu } from 'lucide-react'; // Hamburger Icon
 import { X } from 'lucide-react'; // Close Icon
+import { ThemeSwitcher } from "~/app/_components/theme-switcher";
 
 interface Chat {
   id: number;
@@ -110,6 +111,14 @@ export function TopNav() { // Renamed to TopNav
             </ul>
           </div>
 
+          {/* Theme Switcher */}
+          <div className="border-t border-gray-300 pt-4">
+            <div className="flex items-center justify-between mb-4">
+              <span className="text-sm font-semibold text-gray-700">Theme</span>
+              <ThemeSwitcher />
+            </div>
+          </div>
+
           {/* User Info */}
           <div className="border-t border-gray-300 pt-4">
             <div className="flex items-center justify-between">
@@ -117,7 +126,7 @@ export function TopNav() { // Renamed to TopNav
                 {isLoaded ? (
                   user ? (
                     <>
-                      <div className="font-semibold text-white">{user.username}</div>
+                      <div className="font-semibold text-gray-800">{user.username}</div>
                       <div className="text-sm text-gray-500">Free Plan</div>
                     </>
                   ) : (
@@ -128,17 +137,18 @@ export function TopNav() { // Renamed to TopNav
                 )}
               </div>
               {/* Optional User Avatar/Icon */}
-              {user && user.imageUrl && (
-                <UserButton afterSignOutUrl="/" afterSignOut={()=> router.push("/")}/>
+              {user?.imageUrl && (
+                <UserButton afterSignOutUrl="/" />
               )}
             </div>
           </div>
         </div>
       </div>
 
-      {/* UserButton for sign out on desktop - Always visible in this version, adjust as needed */}
-      <div className="hidden md:block">
-          {user && <UserButton afterSignOutUrl="/" afterSignOut={()=> router.push("/")} />}
+      {/* Desktop: Theme Switcher and UserButton */}
+      <div className="hidden md:flex items-center space-x-3">
+        <ThemeSwitcher />
+        {user && <UserButton afterSignOutUrl="/" />}
       </div>
     </nav>
   );
