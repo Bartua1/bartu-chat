@@ -29,6 +29,7 @@ interface Model {
   provider: string; // Add provider back as it's used in chat-input for icon lookup
   displayName?: string;
   tags?: string[];
+  isFavorite?: boolean; // Add isFavorite property
 }
 
 interface Message {
@@ -528,8 +529,10 @@ export function ChatComponent() {
       try {
         const response = await fetch('/api/user-models');
         if (!response.ok) throw new Error('Failed to fetch favorite models');
-        const data = await response.json() as { favoriteModels: string[] };
-        setFavoriteModels(data.favoriteModels);
+        const data = await response.json() as Model[];
+        // Extract favorite model IDs from the response
+        const favoriteIds = data.filter(model => model.isFavorite).map(model => model.id);
+        setFavoriteModels(favoriteIds);
       } catch (error: unknown) {
         const errorMessage = error instanceof Error ? error.message : "Unknown error";
         console.error('Error fetching favorite models:', error);

@@ -77,7 +77,7 @@ export async function GET(req: NextRequest) {
       createdAt: model.createdAt,
       updatedAt: model.updatedAt,
       // Add favorite status based on user's favoriteModels array
-      isFavorite: favoriteModelIds.includes(String(model.id)),
+      isFavorite: favoriteModelIds.includes(model.id),
     }));
 
     return NextResponse.json(formattedModels);
@@ -157,32 +157,43 @@ export async function POST(req: NextRequest) {
     }
 
     if (typeof body === 'object' && body !== null && 'modelId' in body) {
-      // Model ID can come as a string or a number whatever it is parse it as a string
-      let { modelId } = body as { modelId: string | number };
-      if (typeof modelId === 'number') {
-        modelId = String(modelId);
-      }
-      if (typeof modelId !== 'string') {
-        console.log("[USER_MODELS_POST] modelId is not a string or number");
+      // ModelId comes from frontend as either string or number (the AI model's ID field)
+      const { modelId } = body as { modelId: string | number };
+      
+      // Convert to number for database lookup
+      const modelIdNum = typeof modelId === 'string' ? parseInt(modelId) : modelId;
+      if (isNaN(modelIdNum)) {
+        console.log("[USER_MODELS_POST] modelId is not a valid number");
         return new NextResponse("Invalid modelId", { status: 400 });
       }
 
-      if (typeof modelId !== 'string') {
-        console.log("[USER_MODELS_POST] ERROR: modelId is not a string");
-        return new NextResponse("Invalid modelId", { status: 400 });
+      // Verify the model exists and is accessible to the user
+      const model = await db.query.AIModels.findFirst({
+        where: and(
+          eq(AIModels.id, modelIdNum),
+          or(
+            eq(AIModels.owner, "system"),
+            eq(AIModels.owner, userId)
+          )
+        ),
+      });
+
+      if (!model) {
+        console.log("[USER_MODELS_POST] Model not found or not accessible");
+        return new NextResponse("Model not found", { status: 404 });
       }
 
       // Check if the user already has this model as a favorite
       const existingFavorite = await db.query.userFavoriteModels.findFirst({
-        where: and(eq(userFavoriteModels.userId, userId), eq(userFavoriteModels.modelId, modelId)),
+        where: and(eq(userFavoriteModels.userId, userId), eq(userFavoriteModels.modelId, modelIdNum)),
       });
 
       if (existingFavorite) {
         // If it's a favorite, remove it
-        await db.delete(userFavoriteModels).where(and(eq(userFavoriteModels.userId, userId), eq(userFavoriteModels.modelId, modelId)));
+        await db.delete(userFavoriteModels).where(and(eq(userFavoriteModels.userId, userId), eq(userFavoriteModels.modelId, modelIdNum)));
       } else {
         // If it's not a favorite, add it
-        await db.insert(userFavoriteModels).values({ userId: userId, modelId: modelId });
+        await db.insert(userFavoriteModels).values({ userId: userId, modelId: modelIdNum });
       }
 
       // Fetch the updated list of favorite model IDs

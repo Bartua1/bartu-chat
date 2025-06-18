@@ -184,7 +184,7 @@ export const userFavoriteModels = createTable(
   {
     id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
     userId: varchar("user_id", { length: 256 }).notNull().references(() => users.id),
-    modelId: varchar("model_id", { length: 256 }).notNull().references(() => AIModels.name),
+    modelId: integer("model_id").notNull().references(() => AIModels.id),
     createdAt: timestamp("created_at", { withTimezone: true })
       .default(sql`CURRENT_TIMESTAMP`)
       .notNull(),
