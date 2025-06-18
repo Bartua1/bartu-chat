@@ -65,6 +65,33 @@ export default function ModelsPage() {
     }
   };
 
+  const deleteModel = async (modelId: string) => {
+    if (!confirm("Are you sure you want to delete this model? This action cannot be undone.")) {
+      return;
+    }
+
+    try {
+      const response = await fetch("/api/user-models", {
+        method: "DELETE",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ modelId: modelId }),
+      });
+
+      if (!response.ok) {
+        throw new Error("Failed to delete model");
+      }
+
+      // Refresh the models list to remove the deleted model
+      await fetchUserModels();
+      toast.success("Model deleted successfully");
+    } catch (err) {
+      console.error("Error deleting model:", err);
+      toast.error("Failed to delete model");
+    }
+  };
+
   // Load models on component mount
   useEffect(() => {
     void fetchUserModels();
@@ -101,7 +128,7 @@ export default function ModelsPage() {
         ) : userModels.length === 0 ? (
           <EmptyState onImportClick={() => setShowImportDialog(true)} />
         ) : (
-          <ModelsList models={userModels} favoriteModels={favoriteModels} toggleFavoriteModel={toggleFavoriteModel} />
+          <ModelsList models={userModels} favoriteModels={favoriteModels} toggleFavoriteModel={toggleFavoriteModel} deleteModel={deleteModel} />
         )}
 
         {showImportDialog && (

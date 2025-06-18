@@ -1,18 +1,27 @@
 // app/_components/models/models-page-list.tsx
 import { useState } from "react";
-import { Star, StarOff, Edit } from "lucide-react";
+import { Star, StarOff, Edit, Trash2, Globe, Image, Brain, FileText } from "lucide-react";
 import { UserModel } from "./model-types";
 import { ModelSelector } from "./model-selector";
 import { Button } from "~/components/ui/button";
 import { useRouter } from "next/navigation";
 
+// Tag configuration with icons (same as modify page)
+const TAG_ICONS = {
+  web: Globe,
+  image: Image,
+  think: Brain,
+  docs: FileText,
+} as const;
+
 interface ModelsListProps {
   models: UserModel[];
   favoriteModels: string[];
   toggleFavoriteModel: (modelId: string) => Promise<void>;
+  deleteModel: (modelId: string) => Promise<void>;
 }
 
-export function ModelsList({ models, favoriteModels, toggleFavoriteModel }: ModelsListProps) {
+export function ModelsList({ models, favoriteModels, toggleFavoriteModel, deleteModel }: ModelsListProps) {
   const router = useRouter();
   // Convert UserModel[] to the format expected by ModelSelector
   const formattedModels = models.map(model => {
@@ -85,23 +94,28 @@ export function ModelsList({ models, favoriteModels, toggleFavoriteModel }: Mode
               {model.name}
             </p>
             {model.tags && Array.isArray(model.tags) && model.tags.length > 0 && (
-              <div className="flex flex-wrap gap-1 mb-3">
-                {model.tags.map((tag) => (
-                  <span
-                    key={tag}
-                    className="px-2 py-1 bg-secondary rounded-full text-xs"
-                  >
-                    {tag}
-                  </span>
-                ))}
+              <div className="flex flex-wrap gap-2 mb-3">
+                {model.tags.map((tag) => {
+                  const IconComponent = TAG_ICONS[tag as keyof typeof TAG_ICONS];
+                  if (!IconComponent) return null;
+                  
+                  return (
+                    <div
+                      key={tag}
+                      className="flex items-center space-x-1 px-2 py-1 rounded-full bg-primary/10 border border-primary/20"
+                    >
+                      <IconComponent className="h-3 w-3" />
+                      <span className="text-xs capitalize">{tag}</span>
+                    </div>
+                  );
+                })}
               </div>
             )}
-            <div className="flex items-center justify-between text-xs text-muted-foreground">
-              <span>Owner: {model.owner}</span>
-              {model.maxTokens && (
-                <span>Max: {model.maxTokens.toLocaleString()}</span>
-              )}
-            </div>
+            {model.maxTokens && (
+              <div className="text-xs text-muted-foreground mb-2">
+                <span>Max: {model.maxTokens.toLocaleString()} tokens</span>
+              </div>
+            )}
             {(model.inputPrice > 0 || model.outputPrice > 0) && (
               <div className="mt-2 text-xs text-muted-foreground">
                 <span>Input: ${(model.inputPrice / 1000000).toFixed(6)}</span>
@@ -110,18 +124,33 @@ export function ModelsList({ models, favoriteModels, toggleFavoriteModel }: Mode
               </div>
             )}
             <div className="flex items-center justify-between mt-3">
-              <Button
-                variant="outline"
-                size="sm"
-                className="h-8 px-3 text-xs"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  router.push(`/settings/models/${model.id}/modify`);
-                }}
-              >
-                <Edit className="h-3 w-3 mr-1" />
-                Modify
-              </Button>
+              <div className="flex items-center gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-8 px-3 text-xs"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    router.push(`/settings/models/${model.id}/modify`);
+                  }}
+                >
+                  <Edit className="h-3 w-3 mr-1" />
+                  Modify
+                </Button>
+                {model.owner !== "system" && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-8 w-8 p-0 text-destructive hover:bg-destructive hover:text-destructive-foreground"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      void deleteModel(model.id);
+                    }}
+                  >
+                    <Trash2 className="h-3 w-3" />
+                  </Button>
+                )}
+              </div>
               <Button
                 variant="ghost"
                 size="sm"
