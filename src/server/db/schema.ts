@@ -178,3 +178,23 @@ export const Subscriptions = createTable(
     userIdIndex: index("subscriptions_user_id_idx").on(table.userId), // Prefix index names with table name
   })
 );
+
+export const userFavoriteModels = createTable(
+  "user_favorite_models",
+  {
+    id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+    userId: varchar("user_id", { length: 256 }).notNull().references(() => users.id),
+    modelId: varchar("model_id", { length: 256 }).notNull().references(() => AIModels.name),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .default(sql`CURRENT_TIMESTAMP`)
+      .notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).$onUpdate(
+      () => new Date()
+    ),
+  },
+  (table) => ({
+    userIdIndex: index("user_favorite_models_user_id_idx").on(table.userId),
+    modelIdIndex: index("user_favorite_models_model_id_idx").on(table.modelId),
+    userModelIndex: index("user_favorite_models_user_model_idx").on(table.userId, table.modelId),
+  })
+);

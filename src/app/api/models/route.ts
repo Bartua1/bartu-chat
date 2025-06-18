@@ -31,7 +31,8 @@ export async function GET(request: NextRequest) {
     // For authenticated users, return both system and user models
     const models = await db
       .select({
-        id: AIModels.name, // Use name as id for compatibility
+        id: AIModels.id,
+        name: AIModels.name,
         object: AIModels.provider,
         created: AIModels.createdAt,
         owned_by: AIModels.owner,
@@ -44,6 +45,7 @@ export async function GET(request: NextRequest) {
         userApiId: AIModels.userApiId,
         apiName: userAPIs.name,
         apiUrl: userAPIs.apiUrl,
+        tags: AIModels.tags,
         apiKey: userAPIs.apiKey,
       })
       .from(AIModels)
@@ -68,6 +70,7 @@ export async function GET(request: NextRequest) {
         // Add system models to the result
         const systemModels = systemResponse.data.map(model => ({
           id: model.id,
+          name: model.id,
           object: model.object,
           created: model.created,
           owned_by: "system",
@@ -78,20 +81,37 @@ export async function GET(request: NextRequest) {
           maxTokens: null,
           isActive: "true",
           userApiId: null,
+          tags: [],
           apiName: null,
           apiUrl: process.env.OPEN_AI_URL,
           apiKey: process.env.OPEN_AI_API_KEY,
         }));
         
-        return NextResponse.json([...systemModels, ...models], { status: 200 });
+        // Process models to ensure tags is always an array
+        const processedModels = models.map(model => ({
+          ...model,
+          tags: Array.isArray(model.tags) ? model.tags : (model.tags ? JSON.parse(model.tags as string) as string[] : [])
+        }));
+        
+        return NextResponse.json([...systemModels, ...processedModels], { status: 200 });
       } catch (error) {
         console.error('Error fetching system models:', error);
         // Return only user models if system models fail
-        return NextResponse.json(models, { status: 200 });
+        const processedModels = models.map(model => ({
+          ...model,
+          tags: Array.isArray(model.tags) ? model.tags : (model.tags ? JSON.parse(model.tags as string) as string[] : [])
+        }));
+        return NextResponse.json(processedModels, { status: 200 });
       }
     }
 
-    return NextResponse.json(models, { status: 200 });
+    // Process models to ensure tags is always an array
+    const processedModels = models.map(model => ({
+      ...model,
+      tags: model.tags ?? []
+    }));
+
+    return NextResponse.json(processedModels, { status: 200 });
   } catch (error) {
     console.error('Error fetching models:', error);
     return NextResponse.json(

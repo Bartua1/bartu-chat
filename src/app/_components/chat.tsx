@@ -1,63 +1,16 @@
 'use client';
-// ChatComponent.tsx
-import { useState, useEffect, useRef } from 'react';
-import { FaFileUpload, FaPlay, FaImage, FaFile, FaTimes } from 'react-icons/fa';
-import { IoAddCircleSharp } from "react-icons/io5";
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { useAuth, useUser } from '@clerk/nextjs';
 import { useParams } from 'next/navigation';
-import {
-  Card,
-  CardContent,
-  CardHeader,
-  CardTitle,
-} from "~/components/ui/card"
-import { Input } from "~/components/ui/input"
-import { Button } from "~/components/ui/button"
-import { Label } from "~/components/ui/label"
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "~/components/ui/select"
-import { Textarea } from "~/components/ui/textarea"
-import { ScrollArea } from "~/components/ui/scroll-area"
-import { Badge } from "~/components/ui/badge"
-import { Skeleton } from "~/components/ui/skeleton"
-import { useToast } from "~/hooks/use-toast"
-import { toast } from "sonner"
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "~/components/ui/dialog"
+import { ScrollArea } from "~/components/ui/scroll-area";
+import { toast } from "sonner"; // Using sonner for consistent toasts
 
-import {
-  Collapsible,
-  CollapsibleContent,
-  CollapsibleTrigger,
-} from "~/components/ui/collapsible"
+// Import the new components
+import { AttachmentPreviewDialog } from './attachment-preview-dialog';
+import { ChatMessage } from './chat-message';
+import { ChatInput } from './chat-input';
 
-import {
-  Command,
-  CommandEmpty,
-  CommandGroup,
-  CommandInput,
-  CommandItem,
-  CommandList,
-  CommandSeparator,
-} from "~/components/ui/command"
-
-import { Popover, PopoverContent, PopoverTrigger } from "~/components/ui/popover"
-import { Check, ChevronsUpDown } from "lucide-react"
-import { useChat } from './chat-context'
-import { CodeBlock, CopyBlock, dracula } from "react-code-blocks";
-import { Copy, CheckCircle } from "lucide-react";
-
-interface Model {
-  id: string;
-  object: string;
-  created: number;
-  owned_by: string;
-}
-
-interface StyleOption {
-  value: string;
-  label: string;
-  description: string;
-}
-
+// Re-import interfaces used across components
 interface Attachment {
   id: number;
   fileName: string;
@@ -65,6 +18,17 @@ interface Attachment {
   fileSize: number;
   url: string;
   content?: string;
+}
+
+interface Model {
+  id: string;
+  name?: string; // Add name field from database
+  object: string;
+  created: number;
+  owned_by: string;
+  provider: string; // Add provider back as it's used in chat-input for icon lookup
+  displayName?: string;
+  tags?: string[];
 }
 
 interface Message {
@@ -77,304 +41,75 @@ interface Message {
 }
 
 export function ChatComponent() {
-  const { user, isLoaded } = useUser();
+  const { user } = useUser();
   const { userId } = useAuth();
   const params = useParams();
   const chatUrlFromParams = params.chatUrl;
+
+  // --- State Variables ---
   const [newChat, setNewChat] = useState(true);
-  const [chatName, setChatName] = useState<string | null>(null);
   const [chatId, setChatId] = useState<string | null>(null);
-  const [open, setOpen] = useState(false);
   const [message, setMessage] = useState('');
   const [messages, setMessages] = useState<Message[]>([]);
+  const [attachments, setAttachments] = useState<Attachment[]>([]);
+  const [showPreview, setShowPreview] = useState<Attachment | null>(null);
+  const [copiedAttachment, setCopiedAttachment] = useState<number | null>(null);
+  const [copiedCode, setCopiedCode] = useState<string | null>(null);
+
+  // Model selection state
   const [models, setModels] = useState<Model[]>([]);
   const [selectedModel, setSelectedModel] = useState('');
   const [loadingModels, setLoadingModels] = useState(true);
   const [modelError, setModelError] = useState<string | null>(null);
+  const [openModelPopover, setOpenModelPopover] = useState(false); // Renamed to avoid conflict
+
+  // Chat response state
   const [loadingResponse, setLoadingResponse] = useState(false);
   const [responseError, setResponseError] = useState<string | null>(null);
-  const [tokensPerSecond, setTokensPerSecond] = useState(0);
+  const [favoriteModels, setFavoriteModels] = useState<string[]>([]);
+
+  // Internal state for streaming (not passed to children directly)
   const [startTime, setStartTime] = useState<number | null>(null);
-  const [totalTokens, setTotalTokens] = useState(0);
-  const [systemInstructions, setSystemInstructions] = useState("You are a helpful assistant. Keep your responses concise.");
-  const [copiedCode, setCopiedCode] = useState<string | null>(null);
-  const [streamingResponse, setStreamingResponse] = useState<ReadableStreamDefaultReader<Uint8Array> | null>(null);
-  const [attachments, setAttachments] = useState<Attachment[]>([]);
-  const [showPreview, setShowPreview] = useState<Attachment | null>(null);
-  const [copiedAttachment, setCopiedAttachment] = useState<number | null>(null);
+  const streamingResponseReaderRef = useRef<ReadableStreamDefaultReader<Uint8Array> | null>(null);
 
+  // --- Refs ---
   const chatContainerRef = useRef<HTMLDivElement>(null);
-  const { toast: useToastHook } = useToast();
-  const { addChat, fetchChats } = useChat();
 
-  const styleOptions: StyleOption[] = [
-    { value: "Normal", label: "Normal", description: "Default responses from Claude" },
-    { value: "Concise", label: "Concise", description: "Brief and to-the-point" },
-    { value: "Explanatory", label: "Explanatory", description: "Detailed and informative" },
-    { value: "Formal", label: "Formal", description: "Professional and polite" },
-  ];
-
-  const [selectedStyle, setSelectedStyle] = useState(styleOptions[0]?.value ?? 'Normal');
-
-  useEffect(() => {
-    // Initialize the messages with the system instruction
-    setMessages([{ role: 'system', content: systemInstructions }]);
-  }, [systemInstructions]);
-
-  useEffect(() => {
-    const fetchModels = async () => {
-      setLoadingModels(true);
-      setModelError(null);
-
-      try {
-        const response = await fetch('/api/models');
-        
-        if (!response.ok) {
-          throw new Error(`HTTP error! status: ${response.status}`);
-        }
-        
-        const data = await response.json() as Model[];
-
-        if (data && Array.isArray(data)) {
-          setModels(data);
-          if (data.length > 0) {
-            setSelectedModel(data[0]?.id ?? '');
-          }
-        } else {
-          throw new Error("Invalid response format from /api/models");
-        }
-      } catch (error: unknown) {
-        const errorMessage = error instanceof Error ? error.message : "Unknown error";
-        console.error("Could not fetch models:", error);
-        useToastHook({
-          title: "Error fetching models",
-          description: errorMessage,
-          variant: "destructive",
-        });
-        setModelError(errorMessage);
-      } finally {
-        setLoadingModels(false);
-      }
-    };
-
-    void fetchModels();
-  }, [useToastHook]);
-
-  const extractThinking = (content: string): { thinking: string | null; answer: string } => {
-    // Match any tag that looks like <think>, <thinking>, or <thought> (case insensitive)
+  // --- Utility Functions ---
+  const extractThinking = useCallback((content: string): { thinking: string | null; answer: string } => {
     const thinkingRegex = /<(think|thought|thinking)>([\s\S]*?)<\/(think|thought|thinking)>/gi;
-    
-    // Get all thinking matches
     const thinkingMatches = content.match(thinkingRegex);
-    
-    // If no thinking tags found, return original content
+
     if (!thinkingMatches) {
       return { thinking: null, answer: content };
     }
-    
-    // Extract all thinking content
+
     let thinking = '';
     thinkingMatches.forEach(match => {
-      // Get the content between the tags
       const extractedContent = match.replace(/<(think|thought|thinking)>([\s\S]*?)<\/(think|thought|thinking)>/i, '$2');
       thinking += extractedContent + '\n';
     });
-    
-    // Remove the thinking tags from the original content
+
     let answer = content;
     thinkingMatches.forEach(match => {
       answer = answer.replace(match, '');
     });
-    
-    // Trim any excess whitespace
+
     answer = answer.trim();
     thinking = thinking.trim();
-    
-    return { 
-      thinking: thinking.length > 0 ? thinking : null, 
-      answer 
+
+    return {
+      thinking: thinking.length > 0 ? thinking : null,
+      answer
     };
-  };
+  }, []); // useCallback for stable function reference
 
-  useEffect(() => {
-    const loadPreviousMessages = async () => {
-      if (chatUrlFromParams && typeof chatUrlFromParams === 'string') {
-        setLoadingResponse(true);
-        setNewChat(false);
-        setChatId(chatUrlFromParams);
-        console.log("Loading previous messages for chatId:", chatUrlFromParams);
-        
-        try {
-          const response = await fetch(`/api/chats/${chatUrlFromParams}/messages`);
-          if (!response.ok) {
-            throw new Error(`HTTP error! status: ${response.status}`);
-          }
-          
-          const data = await response.json() as { content: string; sender: 'user' | 'assistant' }[];
-
-          const formattedMessages: Message[] = data.map(msg => {
-            const { thinking, answer } = extractThinking(msg.content);
-            return {
-              role: msg.sender === 'user' ? 'user' : 'assistant',
-              content: answer,
-              thinking: thinking,
-            };
-          });
-
-          // Load previous messages, keeping the system message
-          setMessages([{ role: 'system', content: systemInstructions }, ...formattedMessages]);
-        } catch (error: unknown) {
-          const errorMessage = error instanceof Error ? error.message : "Unknown error";
-          console.error("Failed to load previous messages:", error);
-          useToastHook({
-            title: "Error loading previous messages",
-            description: errorMessage,
-            variant: "destructive",
-          });
-          setResponseError(errorMessage);
-        } finally {
-          setLoadingResponse(false);
-        }
-      }
-    };
-
-    void loadPreviousMessages();
-  }, [chatUrlFromParams, useToastHook, systemInstructions]);
-
-  useEffect(() => {
-    if (chatContainerRef.current) {
-      chatContainerRef.current.scrollTop = chatContainerRef.current.scrollHeight;
-    }
-  }, [messages]);
-
-  const extractCode = (text: string): { code: string | null; language: string | undefined } => {
-    const codeBlockRegex = /```(.*?)\n([\s\S]*?)```/g; // Matches code blocks with or without language
-    const match = codeBlockRegex.exec(text);
-
-    if (match) {
-      const language = match[1]?.trim() ?? undefined; // Extract language, if specified
-      const code = match[2]?.trim() ?? null;        // Extract code content
-
-      return { code, language };
-    }
-
-    return { code: null, language: undefined };
-  };
-
-  // Function to detect if pasted content is > 50 lines and create attachment
-  const handlePaste = async (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
-    const pastedText = e.clipboardData.getData('text');
-    const lineCount = pastedText.split('\n').length;
-    
-    if (lineCount > 50) {
-      e.preventDefault();
-      
-      // Create a text file attachment
-      const timestamp = Date.now();
-      const fileName = `text_${timestamp}.txt`;
-      const blob = new Blob([pastedText], { type: 'text/plain' });
-      const file = new File([blob], fileName, { type: 'text/plain' });
-      
-      // Create form data and upload
-      const formData = new FormData();
-      formData.append('file', file);
-      formData.append('fileName', fileName);
-      formData.append('messageId', '0'); // Temporary messageId, will be updated when message is created
-      
-      try {
-        const response = await fetch('/api/attachments', {
-          method: 'POST',
-          body: formData,
-        });
-        
-        if (response.ok) {
-          const attachment = await response.json() as Attachment;
-          setAttachments(prev => [...prev, attachment]);
-          toast.success(`Large text content (${lineCount} lines) saved as ${fileName}`);
-        } else {
-          throw new Error('Failed to save attachment');
-        }
-      } catch (error) {
-        console.error('Error creating attachment:', error);
-        toast.error('Failed to save large text content as attachment');
-        // Fall back to normal paste behavior
-        setMessage(prev => prev + pastedText);
-      }
-    }
-  };
-
-  const handleFileUpload = () => {
-    const input = document.createElement('input');
-    input.type = 'file';
-    input.accept = '.txt,.md,.json,.js,.ts,.py,.html,.css,.xml,.yaml,.yml';
-    input.onchange = async (e) => {
-      const file = (e.target as HTMLInputElement).files?.[0];
-      if (!file) return;
-      
-      const formData = new FormData();
-      formData.append('file', file);
-      formData.append('fileName', file.name);
-      formData.append('messageId', '0');
-      
-      try {
-        const response = await fetch('/api/attachments', {
-          method: 'POST',
-          body: formData,
-        });
-        
-        if (response.ok) {
-          const attachment = await response.json() as Attachment;
-          setAttachments(prev => [...prev, attachment]);
-          toast.success(`File ${file.name} attached successfully`);
-        } else {
-          throw new Error('Failed to upload file');
-        }
-      } catch (error) {
-        console.error('Error uploading file:', error);
-        toast.error('Failed to upload file');
-      }
-    };
-    input.click();
-  };
-
-  const handleImageUpload = () => {
-    console.log('Image upload functionality to be implemented');
-    toast.info("Image upload functionality to be implemented");
-  };
-
-  const removeAttachment = (id: number) => {
-    setAttachments(prev => prev.filter(att => att.id !== id));
-  };
-
-  const previewAttachment = async (attachment: Attachment) => {
-    console.log('Preview attachment clicked:', attachment);
+  const copyToClipboard = useCallback(async (text: string): Promise<boolean> => {
     try {
-      const response = await fetch(`/api/attachments/${attachment.id}/content`);
-      console.log('API response status:', response.status);
-      
-      if (response.ok) {
-        const data = await response.json() as Attachment;
-        console.log('Received data:', data);
-        setShowPreview({ ...attachment, content: data.content });
-      } else {
-        const errorText = await response.text();
-        console.error('API error:', errorText);
-        toast.error('Failed to load file preview');
-      }
-    } catch (error) {
-      console.error('Error loading preview:', error);
-      toast.error('Failed to load file preview');
-    }
-  };
-
-  const copyToClipboard = async (text: string): Promise<boolean> => {
-    try {
-      // Try the modern clipboard API first
       if (navigator.clipboard && window.isSecureContext) {
         await navigator.clipboard.writeText(text);
         return true;
       } else {
-        // Fallback for older browsers or non-secure contexts
         const textArea = document.createElement('textarea');
         textArea.value = text;
         textArea.style.position = 'fixed';
@@ -391,9 +126,77 @@ export function ChatComponent() {
       console.error('Copy to clipboard failed:', error);
       return false;
     }
-  };
+  }, []); // useCallback for stable function reference
 
-  const copyAttachmentContent = async (attachment: Attachment) => {
+  // --- Handlers for Child Components ---
+
+  const handleCopyCode = useCallback(async (code: string) => {
+    const success = await copyToClipboard(code);
+    if (success) {
+      setCopiedCode(code);
+      toast.success("Code copied to clipboard!");
+      setTimeout(() => {
+        setCopiedCode(null);
+      }, 2000);
+    } else {
+      toast.error("Failed to copy code to clipboard.");
+    }
+  }, [copyToClipboard]);
+
+  const handleFileUpload = useCallback(() => {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = '.txt,.md,.json,.js,.ts,.py,.html,.css,.xml,.yaml,.yml';
+    input.onchange = async (e) => {
+      const file = (e.target as HTMLInputElement).files?.[0];
+      if (!file) return;
+
+      const formData = new FormData();
+      formData.append('file', file);
+      formData.append('fileName', file.name);
+      formData.append('messageId', '0'); // Temporary
+
+      try {
+        const response = await fetch('/api/attachments', {
+          method: 'POST',
+          body: formData,
+        });
+
+        if (response.ok) {
+          const attachment = await response.json() as Attachment;
+          setAttachments(prev => [...prev, attachment]);
+          toast.success(`File ${file.name} attached successfully`);
+        } else {
+          throw new Error('Failed to upload file');
+        }
+      } catch (error) {
+        console.error('Error uploading file:', error);
+        toast.error('Failed to upload file');
+      }
+    };
+    input.click();
+  }, []);
+
+  const removeAttachment = useCallback((id: number) => {
+    setAttachments(prev => prev.filter(att => att.id !== id));
+  }, []);
+
+  const previewAttachment = useCallback(async (attachment: Attachment) => {
+    try {
+      const response = await fetch(`/api/attachments/${attachment.id}/content`);
+      if (response.ok) {
+        const data = await response.json() as Attachment;
+        setShowPreview({ ...attachment, content: data.content });
+      } else {
+        toast.error('Failed to load file preview');
+      }
+    } catch (error) {
+      console.error('Error loading preview:', error);
+      toast.error('Failed to load file preview');
+    }
+  }, []);
+
+  const copyAttachmentContent = useCallback(async (attachment: Attachment) => {
     try {
       const response = await fetch(`/api/attachments/${attachment.id}/content`);
       if (response.ok) {
@@ -417,14 +220,69 @@ export function ChatComponent() {
       console.error('Error copying attachment content:', error);
       toast.error('Failed to copy file content');
     }
-  };
+  }, [copyToClipboard]);
 
-  // Function to process the streaming response
-  const processStream = async (reader: ReadableStreamDefaultReader<Uint8Array>) => {
+  const handlePaste = useCallback(async (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+    const pastedText = e.clipboardData.getData('text');
+    const lineCount = pastedText.split('\n').length;
+
+    if (lineCount > 50) {
+      e.preventDefault();
+
+      const uniqueId = Math.random().toString(36).substring(2, 15);
+      const fileName = `pasted_text_${uniqueId}.txt`;
+      const blob = new Blob([pastedText], { type: 'text/plain' });
+      const file = new File([blob], fileName, { type: 'text/plain' });
+
+      const formData = new FormData();
+      formData.append('file', file);
+      formData.append('fileName', fileName);
+      formData.append('messageId', '0');
+
+      try {
+        const response = await fetch('/api/attachments', {
+          method: 'POST',
+          body: formData,
+        });
+
+        if (response.ok) {
+          const attachment = await response.json() as Attachment;
+          setAttachments(prev => [...prev, attachment]);
+          toast.success(`Large text content (${lineCount} lines) saved as ${fileName}`);
+        } else {
+          throw new Error('Failed to save attachment');
+        }
+      } catch (error) {
+        console.error('Error creating attachment:', error);
+        toast.error('Failed to save large text content as attachment');
+        // Fall back to normal paste behavior if attachment fails
+        setMessage(prev => prev + pastedText);
+      }
+    }
+  }, []);
+
+
+  const toggleFavoriteModel = useCallback(async (modelId: string) => {
+    try {
+      const response = await fetch('/api/user-models', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ modelId: modelId }),
+      });
+      if (!response.ok) throw new Error('Failed to update favorite models');
+      const data = await response.json() as { favoriteModels: string[] };
+      setFavoriteModels(data.favoriteModels);
+    } catch (error: unknown) {
+      const errorMessage = error instanceof Error ? error.message : "Unknown error";
+      console.error('Error updating favorite models:', error);
+      toast.error(errorMessage);
+    }
+  }, []);
+
+  const processStream = useCallback(async (reader: ReadableStreamDefaultReader<Uint8Array>) => {
     let fullReply = "";
     let currentTokenCount = 0;
-    let tps = 0;
-
+    
     setStartTime(Date.now());
 
     const decoder = new TextDecoder();
@@ -445,27 +303,22 @@ export function ChatComponent() {
               const parsedData = JSON.parse(data) as { choices?: { delta?: { content?: string } }[] };
               const content = parsedData.choices?.[0]?.delta?.content;
               if (content) {
-                const text = content;
-                fullReply += text;
+                fullReply += content;
                 currentTokenCount += 1;
-                setTotalTokens(prevTotalTokens => prevTotalTokens + 1);
 
                 const elapsedTime = (Date.now() - (startTime ?? Date.now())) / 1000;
-                tps = currentTokenCount / elapsedTime;
-                setTokensPerSecond(tps);
+                const tps = currentTokenCount / elapsedTime;
 
                 const { thinking, answer } = extractThinking(fullReply);
                 setMessages(prevMessages => {
                   const lastMessage = prevMessages.length > 0 ? prevMessages[prevMessages.length - 1] : null;
                   if (lastMessage && lastMessage.role === 'assistant' && lastMessage.partial) {
-                    // Update existing partial message
                     return prevMessages.map((msg, index) =>
                       index === prevMessages.length - 1
                         ? { ...msg, content: answer, partial: true, tokensPerSecond: tps, thinking: thinking }
                         : msg
                     );
                   } else {
-                    // Add new partial message
                     const newMessage: Message = { role: 'assistant', content: answer, partial: true, tokensPerSecond: tps, thinking: thinking };
                     return [...prevMessages, newMessage];
                   }
@@ -478,270 +331,297 @@ export function ChatComponent() {
         }
       }
       
-      // After the loop, update the final message to be non-partial
       const { thinking: finalThinking, answer: finalAnswer } = extractThinking(fullReply);
       setMessages(prevMessages => {
         return prevMessages.map(msg => {
           if (msg.role === 'assistant' && msg.partial) {
-            return { ...msg, content: finalAnswer, thinking: finalThinking, partial: false, tokensPerSecond: tps };
+            const finalElapsedTime = (Date.now() - (startTime ?? Date.now())) / 1000;
+            const finalTps = currentTokenCount / (finalElapsedTime > 0 ? finalElapsedTime : 1);
+            return { ...msg, content: finalAnswer, thinking: finalThinking, partial: false, tokensPerSecond: finalTps };
           }
           return msg;
         });
       });
-      
+
       return fullReply;
     } catch (error) {
       console.error("Stream processing error:", error);
       throw error;
     }
-  };
+  }, [extractThinking, startTime]);
 
-  const handleSendMessage = async () => {
-    if (message.trim() !== '' || attachments.length > 0) {
-      let currentChatId: string | null = chatId;
-      let userMessageContent = message;
+  const handleSendMessage = useCallback(async () => {
+    if ((!message.trim() && attachments.length === 0) || loadingResponse) return;
 
-      if (selectedStyle && selectedStyle !== "Normal") {
-        const styleDescription = styleOptions.find(option => option.value === selectedStyle)?.description ?? selectedStyle;
-        userMessageContent += `\n\n Please respond in a ${selectedStyle.toLowerCase()} style. (${styleDescription})`;
+    let currentChatId: string | null = chatId;
+    const userMessageContent = message;
+
+    const userMessage: Message = { role: 'user', content: userMessageContent, attachments: [...attachments] };
+
+    try {
+      setMessages(prevMessages => [...prevMessages, userMessage]);
+      setMessage('');
+      const currentAttachments = [...attachments];
+      setAttachments([]);
+      setLoadingResponse(true);
+      setResponseError(null);
+
+      // 1. Create new chat if applicable (with empty title initially)
+      if (newChat && !chatUrlFromParams) {
+        try {
+          const tempTitle = "New Chat"; // Temporary title
+
+          const chatResponse = await fetch('/api/uploadchat', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name: tempTitle, userId: userId }),
+          });
+          if (!chatResponse.ok) throw new Error(`Failed to create new chat: ${chatResponse.status}`);
+          const chat = await chatResponse.json() as { url: string }[];
+          currentChatId = chat[0]?.url ?? null;
+          setChatId(currentChatId);
+          setNewChat(false);
+        } catch (error: unknown) {
+          const errorMessage = error instanceof Error ? error.message : "Unknown error";
+          console.error("Could not create chat:", error);
+          setResponseError(errorMessage);
+          setLoadingResponse(false);
+          return;
+        }
+      } else {
+        currentChatId = chatId ?? (typeof chatUrlFromParams === 'string' ? chatUrlFromParams : null);
+        if (!currentChatId) {
+          console.error("Chat ID is null or undefined.");
+          setLoadingResponse(false);
+          return;
+        }
       }
 
-      const userMessage: Message = { role: 'user', content: userMessageContent, attachments: [...attachments] };
+      // Find the selected model to get its name
+      const selectedModelData = models.find(model => model.id === selectedModel);
+      const modelName = selectedModelData?.name ?? selectedModel; // Fallback to selectedModel if name not found
 
-      try {
-        setMessages(prevMessages => [...prevMessages, userMessage]);
-        setMessage('');
-        const currentAttachments = [...attachments];
-        setAttachments([]);
-        setLoadingResponse(true);
-
-        if (newChat && !chatUrlFromParams) {
-          try {
-            // Generate title for new chat on the server
-            const titleResponse = await fetch('/api/generate-title', {
-              method: 'POST',
-              headers: {
-                'Content-Type': 'application/json',
-              },
-              body: JSON.stringify({ 
-                message: message,
-                model: selectedModel
-              }),
-            });
-
-            if (!titleResponse.ok) {
-              throw new Error(`HTTP error! status: ${titleResponse.status}`);
-            }
-
-            const titleData = await titleResponse.json() as { title?: string };
-            const title = titleData.title ?? `chat - ${new Date().toISOString()}`;
-            setChatName(title);
-
-            // Create new chat on the server
-            const response = await fetch('/api/uploadchat', {
-              method: 'POST',
-              headers: {
-                'Content-Type': 'application/json',
-              },
-              body: JSON.stringify({ name: title, userId: userId }),
-            });
-
-            if (!response.ok) {
-              throw new Error(`HTTP error! status: ${response.status}`);
-            }
-
-            const chat = await response.json() as { url: string }[];
-            currentChatId = chat[0]?.url ?? null;
-            setChatId(currentChatId);
-            setNewChat(false);
-
-            // Add the new chat to the context
-            if (currentChatId) {
-              const newChatObject = {
-                id: Date.now(),
-                name: title,
-                userId: userId!,
-                url: currentChatId
-              };
-
-              addChat(newChatObject);
-            }
-          } catch (error: unknown) {
-            const errorMessage = error instanceof Error ? error.message : "Unknown error";
-            console.error("Could not create chat:", error);
-            useToastHook({
-              title: "Error creating chat",
-              description: errorMessage,
-              variant: "destructive",
-            });
-            setResponseError(errorMessage);
-            setLoadingResponse(false);
-            return;
-          }
-        } else {
-          currentChatId = chatId ?? (typeof chatUrlFromParams === 'string' ? chatUrlFromParams : null);
-
-          if (!currentChatId) {
-            console.error("Chat ID is null or undefined.");
-            return;
-          }
-        }
-
-        setResponseError(null);
-        setStartTime(null);
-        setTotalTokens(0);
-        setTokensPerSecond(0);
-
-        // Save user message to database
-        if (currentChatId) {
-          const attachmentIds = currentAttachments.map(att => att.id);
-          await fetch('/api/uploadmessage', {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({ 
-              chatUrl: currentChatId, 
-              model: selectedModel, 
-              userId: userId!, 
-              content: message, 
-              sender: 'user',
-              attachmentIds 
-            }),
-          });
-        }
-
-        // Get streaming response from server
-        const streamResponse = await fetch('/api/chat', {
+      // 2. Save user message to database
+      if (currentChatId) {
+        const attachmentIds = currentAttachments.map(att => att.id);
+        await fetch('/api/uploadmessage', {
           method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
+          headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            messages: [
-              { role: 'system', content: systemInstructions },
-              ...messages.slice(1),
-              userMessage
-            ],
-            model: selectedModel,
-            stream: true,
-            attachments: currentAttachments,
+            chatUrl: currentChatId,
+            model: modelName, // Send model name instead of selectedModel
+            userId: userId!,
+            content: userMessageContent,
+            sender: 'user',
+            attachmentIds
           }),
         });
-
-        if (!streamResponse.ok) {
-          throw new Error(`HTTP error! status: ${streamResponse.status}`);
-        }
-
-        if (!streamResponse.body) {
-          throw new Error("Response body is null");
-        }
-
-        const reader = streamResponse.body.getReader();
-        setStreamingResponse(reader);
-        
-        // Process the stream
-        const fullReply = await processStream(reader);
-        
-        // After streaming is complete, save assistant message to database
-        if (currentChatId) {
-          await fetch('/api/uploadmessage', {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({ 
-              chatUrl: currentChatId, 
-              model: selectedModel, 
-              userId: userId!, 
-              content: fullReply, 
-              sender: 'assistant' 
-            }),
-          });
-        }
-
-      } catch (error: unknown) {
-        const errorMessage = error instanceof Error ? error.message : "Unknown error";
-        console.error("Could not send message:", error);
-        useToastHook({
-          title: "Error sending message",
-          description: errorMessage,
-          variant: "destructive",
-        });
-        setResponseError(errorMessage);
-        const errorMessageObj: Message = { role: 'assistant', content: "Error: " + errorMessage };
-        setMessages(prevMessages => [...prevMessages, errorMessageObj]);
-      } finally {
-        setLoadingResponse(false);
-        setStartTime(null);
-        setStreamingResponse(null);
       }
-    }
-  };
 
-  // Clean up the stream if component unmounts or user cancels
+      // 3. Get streaming response from server
+      const streamResponse = await fetch('/api/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          messages: [ ...messages.slice(1), userMessage ], // Pass only relevant messages for context
+          model: modelName, // Send model name instead of selectedModel
+          stream: true,
+          attachments: currentAttachments,
+        }),
+      });
+
+      if (!streamResponse.ok) throw new Error(`HTTP error! status: ${streamResponse.status}`);
+      if (!streamResponse.body) throw new Error("Response body is null");
+
+      const reader = streamResponse.body.getReader();
+      streamingResponseReaderRef.current = reader; // Store reader in ref
+      
+      const fullReply = await processStream(reader); // Process the stream
+
+      // 4. Save assistant message to database after stream completes
+      if (currentChatId) {
+        await fetch('/api/uploadmessage', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            chatUrl: currentChatId,
+            model: modelName, // Send model name instead of selectedModel
+            userId: userId!,
+            content: fullReply,
+            sender: 'assistant'
+          }),
+        });
+      }
+
+      // 5. Generate and update chat title after response (only for new chats, first exchange)
+      if (currentChatId && messages.length <= 2) { // First message exchange (user + assistant)
+        try {
+          const titleResponse = await fetch('/api/generate-title', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ message: userMessageContent, model: modelName }), // Send model name instead of selectedModel
+          });
+          if (titleResponse.ok) {
+            const titleData = await titleResponse.json() as { title?: string };
+            const generatedTitle = titleData.title ?? `Chat - ${new Date().toLocaleDateString()}`;
+            
+            // Update the chat title in the database
+            await fetch(`/api/chats/${currentChatId}`, {
+              method: 'PATCH',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ name: generatedTitle }),
+            });
+          }
+        } catch (error) {
+          console.error("Could not generate/update chat title:", error);
+          // Don't throw error as this is not critical for chat functionality
+        }
+      }
+
+    } catch (error: unknown) {
+      const errorMessage = error instanceof Error ? error.message : "Unknown error";
+      console.error("Could not send message:", error);
+      setResponseError(errorMessage);
+      setMessages(prevMessages => {
+        // Find if there's a partial assistant message and update it with the error
+        const lastMessage = prevMessages[prevMessages.length - 1];
+        if (lastMessage && lastMessage.role === 'assistant' && lastMessage.partial) {
+          return prevMessages.map((msg, idx) =>
+            idx === prevMessages.length - 1
+              ? { ...msg, content: `Error: ${errorMessage}`, partial: false, thinking: null }
+              : msg
+          );
+        }
+        // Otherwise, add a new error message
+        return [...prevMessages, { role: 'assistant', content: `Error: ${errorMessage}` }];
+      });
+    } finally {
+      setLoadingResponse(false);
+      setStartTime(null);
+      streamingResponseReaderRef.current = null;
+    }
+  }, [message, attachments, loadingResponse, chatId, newChat, chatUrlFromParams, selectedModel, messages, userId, processStream, models]);
+
+
+  // --- Effects ---
+
+  // Auto-scroll to bottom of chat
+  useEffect(() => {
+    if (chatContainerRef.current) {
+      chatContainerRef.current.scrollTop = chatContainerRef.current.scrollHeight;
+    }
+  }, [messages]);
+
+  // Cleanup streaming response reader on unmount
   useEffect(() => {
     return () => {
-      if (streamingResponse) {
-        void streamingResponse.cancel("Component unmounted or operation cancelled");
+      if (streamingResponseReaderRef.current) {
+        void streamingResponseReaderRef.current.cancel("Component unmounted or operation cancelled");
       }
     };
-  }, [streamingResponse]);
+  }, []);
 
-  const handleCopyCode = async (code: string) => {
-    const success = await copyToClipboard(code);
-    if (success) {
-      setCopiedCode(code);
-      setTimeout(() => {
-        setCopiedCode(null); // Reset after a short delay
-      }, 2000);
-    } else {
-      console.error("Failed to copy code");
-      toast.error("Failed to copy code to clipboard");
-    }
-  };
+  // Fetch favorite models
+  useEffect(() => {
+    const fetchFavoriteModels = async () => {
+      if (!userId) return;
+      try {
+        const response = await fetch('/api/user-models');
+        if (!response.ok) throw new Error('Failed to fetch favorite models');
+        const data = await response.json() as { favoriteModels: string[] };
+        setFavoriteModels(data.favoriteModels);
+      } catch (error: unknown) {
+        const errorMessage = error instanceof Error ? error.message : "Unknown error";
+        console.error('Error fetching favorite models:', error);
+        toast.error(errorMessage);
+      }
+    };
+    void fetchFavoriteModels();
+  }, [userId]);
+
+
+  // Fetch available models
+  useEffect(() => {
+    const fetchModels = async () => {
+      setLoadingModels(true);
+      setModelError(null);
+      try {
+        const response = await fetch('/api/models');
+        if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+        
+        const data = await response.json() as Model[];
+        if (data && Array.isArray(data)) {
+          const modelsWithProvider = data.map(model => ({
+            ...model,
+            provider: model.provider || 'unknown'
+          }));
+          setModels(modelsWithProvider);
+          if (modelsWithProvider.length > 0 && !selectedModel) {
+            setSelectedModel(modelsWithProvider[0]?.id ?? '');
+          }
+        } else {
+          throw new Error("Invalid response format from /api/models");
+        }
+      } catch (error: unknown) {
+        const errorMessage = error instanceof Error ? error.message : "Unknown error";
+        console.error("Could not fetch models:", error);
+        setModelError(errorMessage);
+      } finally {
+        setLoadingModels(false);
+      }
+    };
+    void fetchModels();
+  }, [selectedModel]); // Re-fetch if selectedModel changes (though usually just once)
+
+  // Load previous messages for existing chats
+  useEffect(() => {
+    const loadPreviousMessages = async () => {
+      if (chatUrlFromParams && typeof chatUrlFromParams === 'string') {
+        setLoadingResponse(true);
+        setNewChat(false);
+        setChatId(chatUrlFromParams);
+
+        try {
+          const response = await fetch(`/api/chats/${chatUrlFromParams}/messages`);
+          if (!response.ok) {
+            console.error("Error fetching messages:", response.status, response.statusText);
+            throw new Error(`HTTP error! status: ${response.status}`);
+          }
+          const data = await response.json() as { content: string; sender: 'user' | 'assistant' }[];
+
+          const formattedMessages: Message[] = data.map(msg => {
+            const { thinking, answer } = extractThinking(msg.content);
+            return {
+              role: msg.sender === 'user' ? 'user' : 'assistant',
+              content: answer,
+              thinking: thinking,
+            };
+          });
+          setMessages(formattedMessages);
+        } catch (error: unknown) {
+          const errorMessage = error instanceof Error ? error.message : "Unknown error";
+          console.error("Could not load messages:", error);
+          setResponseError(errorMessage);
+          toast.error(`Failed to load chat history: ${errorMessage}`);
+        } finally {
+          setLoadingResponse(false);
+        }
+      } else {
+        // For a brand new chat, initialize with an empty array
+        setMessages([]);
+      }
+    };
+    void loadPreviousMessages();
+  }, [chatUrlFromParams, extractThinking]);
+
 
   return (
-    <div className="flex flex-col h-screen bg-gradient-to-br from-background to-muted/20">
-      {/* Top Bar */}
-      <div className="border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
-        <div className="p-4">
-          <div className="flex flex-row justify-between items-center mb-4">
-            <h1 className="text-2xl font-semibold tracking-tight">Chat</h1>
-            <div className="flex items-center gap-2">
-              {tokensPerSecond > 0 && (
-                <Badge variant="outline" className="text-xs">
-                  {tokensPerSecond.toFixed(1)} tok/s
-                </Badge>
-              )}
-            </div>
-          </div>
-          
-          <Collapsible className="border rounded-lg bg-card/50 backdrop-blur">
-            <CollapsibleTrigger className="w-full p-3 text-left hover:bg-muted/50 transition-colors rounded-lg">
-              <div className="flex items-center justify-between">
-                <Label className="cursor-pointer font-medium">System Instructions</Label>
-                <ChevronsUpDown className="h-4 w-4" />
-              </div>
-            </CollapsibleTrigger>
-            <CollapsibleContent className="p-3 pt-0">
-              <Textarea
-                id="systemInstructions"
-                className="w-full min-h-[80px] resize-none border-0 bg-transparent focus-visible:ring-1"
-                placeholder="Define the AI's behavior, tone, and expertise..."
-                value={systemInstructions}
-                onChange={(e) => setSystemInstructions(e.target.value)}
-              />
-            </CollapsibleContent>
-          </Collapsible>
-        </div>
-      </div>
-
-      {/* Middle Section (Conversation History) */}
-      <div className="flex-1 overflow-hidden">
+    <div className="relative flex flex-col h-screen bg-gradient-to-br from-background to-muted/20">
+      {/* Chat Background - Full Screen */}
+      <div className="absolute inset-0 overflow-hidden">
         <ScrollArea className="h-full">
-          <div ref={chatContainerRef} className="p-4 space-y-6">
-            {newChat && messages.length === 1 && (
+          <div ref={chatContainerRef} className="p-4 space-y-6 pb-32">
+            {newChat && messages.length === 0 && ( // Display initial message only for truly new, empty chats
               <div className="flex items-center justify-center h-[60vh]">
                 <div className="text-center space-y-4">
                   <div className="text-6xl">💬</div>
@@ -751,113 +631,12 @@ export function ChatComponent() {
               </div>
             )}
 
-            {messages.slice(1).map((msg, index) => {
-              const isUser = msg.role === 'user';
-              const { code, language } = extractCode(msg.content);
-              const isCodeResponse = msg.role === 'assistant' && code !== null;
-
-              return (
-                <div key={index} className="space-y-2">
-                  {/* Thinking Section */}
-                  {msg.role === 'assistant' && msg.thinking && (
-                    <div className="flex justify-start">
-                      <Collapsible className="max-w-[80%]">
-                        <CollapsibleTrigger asChild>
-                          <Button variant="ghost" size="sm" className="h-auto p-2 text-xs">
-                            <Badge variant="secondary" className="mr-2">🤔 Thinking</Badge>
-                            <ChevronsUpDown className="h-3 w-3" />
-                          </Button>
-                        </CollapsibleTrigger>
-                        <CollapsibleContent className="mt-2">
-                          <div className="bg-muted/50 rounded-lg p-3 text-sm text-muted-foreground border-l-4 border-muted-foreground/30">
-                            <pre className="whitespace-pre-wrap font-mono text-xs">{msg.thinking}</pre>
-                          </div>
-                        </CollapsibleContent>
-                      </Collapsible>
-                    </div>
-                  )}
-
-                  {/* Attachments */}
-                  {msg.attachments && msg.attachments.length > 0 && (
-                    <div className={`flex ${isUser ? 'justify-end' : 'justify-start'}`}>
-                      <div className={`max-w-[80%] ${isUser ? 'order-2 mr-4' : 'order-1 ml-4'}`}>
-                        <div className="flex flex-wrap gap-2 mb-2">
-                          {msg.attachments.map((attachment) => (
-                            <Button
-                              key={attachment.id}
-                              variant="outline"
-                              size="sm"
-                              className="h-auto p-2 text-xs"
-                              onClick={() => previewAttachment(attachment)}
-                            >
-                              <FaFile className="h-3 w-3 mr-1" />
-                              {attachment.fileName}
-                            </Button>
-                          ))}
-                        </div>
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Main Message Bubble */}
-                  <div className={`flex ${isUser ? 'justify-end' : 'justify-start'}`}>
-                    <div className={`max-w-[80%] ${isUser ? 'order-2' : 'order-1'}`}>
-                      {isCodeResponse ? (
-                        <div className="relative bg-card border rounded-lg overflow-hidden shadow-sm">
-                          <div className="flex items-center justify-between bg-muted/50 px-3 py-2 border-b">
-                            <span className="text-xs font-medium text-muted-foreground">
-                              {language ?? 'Code'}
-                            </span>
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              className="h-6 w-6 p-0"
-                              onClick={() => handleCopyCode(code!)}
-                            >
-                              {copiedCode === code ? (
-                                <CheckCircle className="h-3 w-3 text-green-500" />
-                              ) : (
-                                <Copy className="h-3 w-3" />
-                              )}
-                            </Button>
-                          </div>
-                          <div className="p-0">
-                            <CodeBlock
-                              text={code!}
-                              language={language ?? "javascript"}
-                              theme={dracula}
-                              showLineNumbers={true}
-                            />
-                          </div>
-                        </div>
-                      ) : (
-                        <div
-                          className={`rounded-2xl px-4 py-3 shadow-sm ${
-                            isUser
-                              ? 'bg-primary text-primary-foreground ml-4'
-                              : 'bg-card border mr-4'
-                          }`}
-                        >
-                          <div className="prose prose-sm dark:prose-invert max-w-none">
-                            <p className="whitespace-pre-wrap m-0 leading-relaxed">
-                              {msg.content}
-                            </p>
-                          </div>
-                        </div>
-                      )}
-                      
-                      {/* Message metadata */}
-                      <div className={`mt-1 text-xs text-muted-foreground ${isUser ? 'text-right mr-4' : 'text-left ml-4'}`}>
-                        {msg.role === 'assistant' && msg.tokensPerSecond && (
-                          <span>{msg.tokensPerSecond.toFixed(1)} tok/s</span>
-                        )}
-                        {msg.partial && <span className="animate-pulse"> • Generating...</span>}
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              );
-            })}
+            <ChatMessage
+              messages={messages}
+              previewAttachment={previewAttachment}
+              handleCopyCode={handleCopyCode}
+              copiedCode={copiedCode}
+            />
 
             {/* Loading state */}
             {loadingResponse && (
@@ -887,229 +666,39 @@ export function ChatComponent() {
         </ScrollArea>
       </div>
 
-      {/* Bottom Bar (Input area) - New Compact Layout */}
-      <div className="border-t bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
-        <div className="p-4 space-y-3">
-          {/* Attachments Preview */}
-          {attachments.length > 0 && (
-            <div className="flex flex-wrap gap-2">
-              {attachments.map((attachment) => (
-                <div key={attachment.id} className="flex items-center gap-1 bg-muted/50 rounded-lg px-2 py-1 text-xs">
-                  <FaFile className="h-3 w-3" />
-                  <span className="truncate max-w-[100px]">{attachment.fileName}</span>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className="h-4 w-4 p-0 hover:bg-muted"
-                    onClick={() => previewAttachment(attachment)}
-                    title="Preview file"
-                  >
-                    <FaFile className="h-2 w-2" />
-                  </Button>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className="h-4 w-4 p-0 hover:bg-muted"
-                    onClick={() => copyAttachmentContent(attachment)}
-                    title="Copy content"
-                  >
-                    {copiedAttachment === attachment.id ? (
-                      <CheckCircle className="h-2 w-2 text-green-500" />
-                    ) : (
-                      <Copy className="h-2 w-2" />
-                    )}
-                  </Button>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className="h-4 w-4 p-0 hover:bg-destructive/50"
-                    onClick={() => removeAttachment(attachment.id)}
-                    title="Remove attachment"
-                  >
-                    <FaTimes className="h-2 w-2" />
-                  </Button>
-                </div>
-              ))}
-            </div>
-          )}
-
-          {/* Input Area */}
-          <div className="flex items-end space-x-3">
-            <div className="flex-1 relative">
-              <Textarea
-                placeholder="Type your message here..."
-                value={message}
-                onChange={(e) => setMessage(e.target.value)}
-                onPaste={handlePaste}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter' && !e.shiftKey && !loadingResponse) {
-                    e.preventDefault();
-                    void handleSendMessage();
-                  }
-                }}
-                disabled={Boolean(loadingModels ?? modelError ?? loadingResponse)}
-                className="min-h-[60px] max-h-32 resize-none bg-background/50 border-muted-foreground/20 focus:border-primary/50 pr-20"
-                rows={2}
-              />
-              
-              {/* Attach buttons */}
-              <div className="absolute right-2 bottom-2 flex space-x-1">
-                <Button
-                  type="button"
-                  onClick={handleFileUpload}
-                  variant="ghost"
-                  size="sm"
-                  disabled={loadingResponse}
-                  className="h-8 w-8 p-0 hover:bg-muted/50"
-                  title="Upload File"
-                >
-                  <IoAddCircleSharp className="h-4 w-4" />
-                </Button>
-                <Button
-                  type="button"
-                  onClick={handleImageUpload}
-                  variant="ghost"
-                  size="sm"
-                  disabled={loadingResponse}
-                  className="h-8 w-8 p-0 hover:bg-muted/50"
-                  title="Upload Image"
-                >
-                  <FaImage className="h-4 w-4" />
-                </Button>
-              </div>
-            </div>
-            
-            <Button
-              onClick={handleSendMessage}
-              disabled={loadingResponse || (!message.trim() && attachments.length === 0)}
-              size="lg"
-              className="h-[60px] px-6 bg-primary hover:bg-primary/90"
-            >
-              {loadingResponse ? (
-                <div className="w-4 h-4 border-2 border-current border-t-transparent rounded-full animate-spin" />
-              ) : (
-                <FaPlay className="h-4 w-4" />
-              )}
-            </Button>
-          </div>
-
-          {/* Model and Style Selection - Below Input */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-            {/* Model Selection */}
-            {loadingModels ? (
-              <div className="space-y-1">
-                <Skeleton className="h-3 w-16" />
-                <Skeleton className="h-8 w-full" />
-              </div>
-            ) : modelError ? (
-              <div className="text-destructive text-xs">{modelError}</div>
-            ) : (
-              <div className="space-y-1">
-                <Label className="text-xs font-medium text-muted-foreground">Model</Label>
-                <Popover open={open} onOpenChange={setOpen}>
-                  <PopoverTrigger asChild>
-                    <Button
-                      variant="outline"
-                      role="combobox"
-                      aria-expanded={open}
-                      className="w-full justify-between bg-background/50 h-8 text-xs"
-                    >
-                      <span className="truncate">
-                        {selectedModel || "Select model..."}
-                      </span>
-                      <ChevronsUpDown className="ml-2 h-3 w-3 shrink-0 opacity-50" />
-                    </Button>
-                  </PopoverTrigger>
-                  <PopoverContent className="w-full p-0" align="start">
-                    <Command>
-                      <CommandInput placeholder="Search models..." />
-                      <CommandList>
-                        <CommandEmpty>No model found.</CommandEmpty>
-                        <CommandGroup>
-                          {models.map((model) => (
-                            <CommandItem
-                              key={model.id}
-                              value={model.id}
-                              onSelect={(currentValue) => {
-                                setSelectedModel(currentValue === selectedModel ? "" : currentValue)
-                                setOpen(false)
-                              }}
-                            >
-                              <Check
-                                className="mr-2 h-4 w-4"
-                                style={{ visibility: selectedModel === model.id ? 'visible' : 'hidden' }}
-                              />
-                              {model.id}
-                            </CommandItem>
-                          ))}
-                        </CommandGroup>
-                      </CommandList>
-                    </Command>
-                  </PopoverContent>
-                </Popover>
-              </div>
-            )}
-
-            {/* Style Selection */}
-            <div className="space-y-1">
-              <Label className="text-xs font-medium text-muted-foreground">Style</Label>
-              <Select value={selectedStyle} onValueChange={setSelectedStyle}>
-                <SelectTrigger className="bg-background/50 h-8 text-xs">
-                  <SelectValue placeholder="Select style" />
-                </SelectTrigger>
-                <SelectContent>
-                  {styleOptions.map((style) => (
-                    <SelectItem key={style.value} value={style.value}>
-                      <div>
-                        <div className="font-medium text-xs">{style.label}</div>
-                        <div className="text-xs text-muted-foreground">{style.description}</div>
-                      </div>
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-          </div>
-        </div>
-      </div>
+      {/* Floating Input Area - Fixed at Bottom */}
+      {userId && (
+        <ChatInput
+          message={message}
+          setMessage={setMessage}
+          attachments={attachments}
+          setAttachments={setAttachments}
+          loadingResponse={loadingResponse}
+          handleSendMessage={handleSendMessage}
+          handleFileUpload={handleFileUpload}
+          previewAttachment={previewAttachment}
+          removeAttachment={removeAttachment}
+          loadingModels={loadingModels}
+          modelError={modelError}
+          open={openModelPopover}
+          setOpen={setOpenModelPopover}
+          selectedModel={selectedModel}
+          setSelectedModel={setSelectedModel}
+          models={models}
+          favoriteModels={favoriteModels}
+          toggleFavoriteModel={toggleFavoriteModel}
+          // Pass the handlePaste function to ChatInput
+          handlePaste={handlePaste}
+        />
+      )}
 
       {/* File Preview Dialog */}
-      <Dialog open={!!showPreview} onOpenChange={() => setShowPreview(null)}>
-        <DialogContent className="max-w-4xl max-h-[80vh] overflow-hidden">
-          <DialogHeader>
-            <DialogTitle className="flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <FaFile className="h-4 w-4" />
-                {showPreview?.fileName ?? 'File Preview'}
-              </div>
-              {showPreview && (
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => copyAttachmentContent(showPreview)}
-                  className="h-8 px-3"
-                >
-                  {copiedAttachment === showPreview.id ? (
-                    <>
-                      <CheckCircle className="h-3 w-3 mr-1 text-green-500" />
-                      Copied
-                    </>
-                  ) : (
-                    <>
-                      <Copy className="h-3 w-3 mr-1" />
-                    </>
-                  )}
-                </Button>
-              )}
-            </DialogTitle>
-          </DialogHeader>
-          <ScrollArea className="h-[60vh] w-full">
-            <pre className="whitespace-pre-wrap text-sm p-4 bg-muted/50 rounded-lg">
-              {showPreview?.content ?? 'Loading...'}
-            </pre>
-          </ScrollArea>
-        </DialogContent>
-      </Dialog>
+      <AttachmentPreviewDialog
+        showPreview={showPreview}
+        setShowPreview={setShowPreview}
+        copyAttachmentContent={copyAttachmentContent}
+        copiedAttachment={copiedAttachment}
+      />
     </div>
   );
 }

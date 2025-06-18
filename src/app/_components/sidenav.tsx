@@ -35,7 +35,7 @@ interface Chat {
   name: string;
   url: string;
   userId: string;
-  createdAt: Date;
+  createdAt: Date | null;
   updatedAt?: Date | null;
 }
 
@@ -102,11 +102,29 @@ export function SideNav() {
         }
         const result = await response.json() as Chat[];
         // Convert createdAt strings to Date objects
-        const chatsWithDates = result.map(chat => ({
-          ...chat,
-          createdAt: new Date(chat.createdAt),
-          updatedAt: chat.updatedAt ? new Date(chat.updatedAt) : null,
-        }));
+        const chatsWithDates = result.map(chat => {
+          let createdAt: Date | null = null;
+          if (chat.createdAt) {
+            const date = new Date(chat.createdAt);
+            if (!isNaN(date.getTime())) {
+              createdAt = date;
+            }
+          }
+
+          let updatedAt: Date | null = null;
+          if (chat.updatedAt) {
+            const date = new Date(chat.updatedAt);
+            if (!isNaN(date.getTime())) {
+              updatedAt = date;
+            }
+          }
+
+          return {
+            ...chat,
+            createdAt: createdAt,
+            updatedAt: updatedAt,
+          };
+        });
         setChats(chatsWithDates);
       } catch (err) {
         console.error("Failed to fetch chats in SideNav:", err);
@@ -120,35 +138,8 @@ export function SideNav() {
   }, [isSignedIn, user?.id]);
 
   // Handle new chat creation
-  const handleNewChat = async () => {
-    if (!user?.id) return;
-    
-    try {
-      const response = await fetch('/api/uploadchat', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          name: 'New Chat',
-          userId: user.id,
-        }),
-      });
-
-      if (!response.ok) {
-        throw new Error('Failed to create new chat');
-      }
-
-      const newChatArray = await response.json() as Chat[];
-      const newChat = newChatArray[0];
-      if (newChat) {
-        // Add the new chat to our local state
-        setChats(prev => [newChat, ...prev]);
-        router.push(`/${newChat.url}`);
-      }
-    } catch (err) {
-      console.error('Failed to create new chat:', err);
-    }
+  const handleNewChat = () => {
+    router.push("/");
   };
 
   // Filter chats based on search query
@@ -322,7 +313,7 @@ export function SideNav() {
                             <div className="min-w-0 flex-1">
                               <p className="truncate text-sm font-medium">{chat.name}</p>
                               <p className="truncate text-xs text-muted-foreground">
-                                {chat.createdAt.toLocaleDateString()}
+                                {chat.createdAt ? chat.createdAt.toLocaleDateString() : 'No date'}
                               </p>
                             </div>
                           </>

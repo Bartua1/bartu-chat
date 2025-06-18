@@ -1,241 +1,131 @@
-import { NextRequest, NextResponse } from "next/server";
-import { auth } from "@clerk/nextjs/server";
+import { getAuth, clerkClient } from "@clerk/nextjs/server";
+import { NextResponse, NextRequest } from "next/server";
 import { db } from "~/server/db";
-import { AIModels, userAPIs } from "~/server/db/schema";
-import { eq, and, or } from "drizzle-orm";
-import { OpenAI } from "openai";
+import { users, AIModels, userFavoriteModels } from "~/server/db/schema";
+import { eq, or, and, inArray } from "drizzle-orm";
 
-interface ModelData {
-  id: number;
-  name: string;
-  displayName: string;
-  provider: string;
-  inputPrice: number;
-  outputPrice: number;
-  maxTokens: number | null;
-  isActive: string;
-  userApiId: number | null;
-  owner: string;
-}
-
-interface AvailableModel {
-  id: string;
-  object: string;
-  created: number;
-  owned_by: string;
-}
-
-interface ImportModelRequest {
-  apiId: number;
-  models: {
-    name: string;
-    displayName: string;
-    inputPrice: number;
-    outputPrice: number;
-    maxTokens: number | null;
-    isActive: string;
-    tags?: string[];
-  }[];
-}
-
-// GET - Fetch user's models (both system and user-added)
-export async function GET() {
+export async function GET(req: NextRequest) {
   try {
-    const { userId } = await auth();
-    
+    const { userId } = getAuth(req);
     if (!userId) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+      return new NextResponse("Unauthorized", { status: 403 });
     }
 
+    let user = await db.query.users.findFirst({
+      where: eq(users.id, userId),
+    });
+
+    if (!user) {
+      // Create a new user if one doesn't exist
+      try {
+        const clerk = await clerkClient();
+        const clerkUser = await clerk.users.getUser(userId);
+        if (!clerkUser) {
+          throw new Error('Failed to fetch user info from Clerk');
+        }
+        await db.insert(users).values({
+          id: userId,
+          email: clerkUser.emailAddresses?.[0]?.emailAddress ?? '',
+          firstName: clerkUser.firstName ?? '',
+          lastName: clerkUser.lastName ?? '',
+        });
+        const newUser = await db.query.users.findFirst({
+          where: eq(users.id, userId),
+        });
+        if (!newUser) {
+          return new NextResponse("Failed to create user", { status: 500 });
+        }
+        user = newUser;
+      } catch (createUserError: unknown) {
+        const errorMessage = createUserError instanceof Error ? createUserError.message : "Unknown error";
+        console.error("[USER_MODELS_GET_CREATE_USER]", errorMessage);
+        return new NextResponse("Failed to create user", { status: 500 });
+      }
+    }
+
+    // Fetch all active models that are either system models or belong to this user
     const models = await db
-      .select({
-        id: AIModels.id,
-        name: AIModels.name,
-        displayName: AIModels.displayName,
-        provider: AIModels.provider,
-        inputPrice: AIModels.inputPrice,
-        outputPrice: AIModels.outputPrice,
-        maxTokens: AIModels.maxTokens,
-        isActive: AIModels.isActive,
-        userApiId: AIModels.userApiId,
-        owner: AIModels.owner,
-        apiName: userAPIs.name,
-        apiUrl: userAPIs.apiUrl,
-      })
-      .from(AIModels)
-      .leftJoin(userAPIs, eq(AIModels.userApiId, userAPIs.id))
-      .where(
-        or(
-          eq(AIModels.owner, "system"),
-          eq(AIModels.owner, userId)
-        )
-      );
-
-    return NextResponse.json(models);
-  } catch (error) {
-    console.error("Error fetching user models:", error);
-    return NextResponse.json(
-      { error: "Failed to fetch models" },
-      { status: 500 }
-    );
-  }
-}
-
-// PATCH - Update model settings
-export async function PATCH(request: NextRequest) {
-  try {
-    const { userId } = await auth();
-    
-    if (!userId) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    }
-
-    const body = await request.json();
-    const { id, displayName, inputPrice, outputPrice, maxTokens, isActive } = body;
-
-    if (!id) {
-      return NextResponse.json(
-        { error: "Model ID is required" },
-        { status: 400 }
-      );
-    }
-
-    // Only allow updates to user-owned models
-    const updateData: Partial<ModelData> = {};
-    if (displayName !== undefined) updateData.displayName = displayName;
-    if (inputPrice !== undefined) updateData.inputPrice = inputPrice;
-    if (outputPrice !== undefined) updateData.outputPrice = outputPrice;
-    if (maxTokens !== undefined) updateData.maxTokens = maxTokens;
-    if (isActive !== undefined) updateData.isActive = isActive;
-
-    await db
-      .update(AIModels)
-      .set(updateData)
-      .where(
-        and(
-          eq(AIModels.id, id),
-          eq(AIModels.owner, userId)
-        )
-      );
-
-    return NextResponse.json({ message: "Model updated successfully" });
-  } catch (error) {
-    console.error("Error updating model:", error);
-    return NextResponse.json(
-      { error: "Failed to update model" },
-      { status: 500 }
-    );
-  }
-}
-
-// POST - Import selected models from a specific API
-export async function POST(request: NextRequest) {
-  try {
-    const { userId } = await auth();
-    
-    if (!userId) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    }
-
-    const body = await request.json() as ImportModelRequest;
-    const { apiId, models } = body;
-
-    if (!apiId || !models || !Array.isArray(models)) {
-      return NextResponse.json(
-        { error: "API ID and models array are required" },
-        { status: 400 }
-      );
-    }
-
-    // Verify the API belongs to the user
-    const userApi = await db
       .select()
-      .from(userAPIs)
+      .from(AIModels)
       .where(
         and(
-          eq(userAPIs.id, apiId),
-          eq(userAPIs.userId, userId)
+          eq(AIModels.isActive, "true"),
+          or(
+            eq(AIModels.owner, "system"),
+            eq(AIModels.owner, userId)
+          )
         )
-      )
-      .limit(1);
-
-    if (userApi.length === 0) {
-      return NextResponse.json(
-        { error: "API not found or not owned by user" },
-        { status: 404 }
       );
-    }
 
-    const api = userApi[0]!;
+    // Fetch user's favorite model IDs from the user_favorite_models table
+    const favoriteModelIdsResult = await db.select({ modelId: userFavoriteModels.modelId }).from(userFavoriteModels).where(eq(userFavoriteModels.userId, userId));
+    const favoriteModelIds = favoriteModelIdsResult.map(item => item.modelId);
 
-    // Prepare model inserts
-    const modelInserts = models.map(model => ({
-      userApiId: apiId,
+    // Format models for frontend consumption
+    const formattedModels = models.map(model => ({
+      id: model.id,
       name: model.name,
       displayName: model.displayName,
-      provider: api.provider,
-      owner: userId,
+      provider: model.provider,
       inputPrice: model.inputPrice,
       outputPrice: model.outputPrice,
-      maxTokens: model.maxTokens,
-      isActive: model.isActive,
-      tags: model.tags || null,
+      owner: model.owner,
+      tags: model.tags ?? [],
+      maxTokens: typeof model.maxTokens === 'number' ? model.maxTokens : null,
+      isActive: model.isActive === "true",
+      userApiId: model.userApiId ?? null,
+      createdAt: model.createdAt,
+      updatedAt: model.updatedAt,
+      // Add favorite status based on user's favoriteModels array
+      isFavorite: favoriteModelIds.includes(String(model.id)),
     }));
 
-    // Insert the models
-    const insertedModels = await db
-      .insert(AIModels)
-      .values(modelInserts)
-      .returning();
-
-    return NextResponse.json({
-      message: `Successfully imported ${insertedModels.length} models`,
-      models: insertedModels
-    });
-  } catch (error) {
-    console.error("Error importing models:", error);
-    return NextResponse.json(
-      { error: "Failed to import models" },
-      { status: 500 }
-    );
+    return NextResponse.json(formattedModels);
+  } catch (error: unknown) {
+    console.error("[USER_MODELS_GET]", error);
+    return new NextResponse("Internal error", { status: 500 });
   }
 }
 
-// DELETE - Delete user model
-export async function DELETE(request: NextRequest) {
+export async function POST(req: NextRequest) {
+  let userId: string | undefined;
+  let modelId: string | undefined;
   try {
-    const { userId } = await auth();
-    
+    const { userId: authUserId } = getAuth(req);
+    userId = authUserId;
+    const body = (await req.json()) as { modelId: string };
+    modelId = body.modelId;
+
     if (!userId) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+      return new NextResponse("Unauthorized", { status: 403 });
     }
 
-    const { searchParams } = new URL(request.url);
-    const modelId = searchParams.get("id");
-
-    if (!modelId) {
-      return NextResponse.json(
-        { error: "Model ID is required" },
-        { status: 400 }
-      );
+    if (typeof modelId !== 'string') {
+      return new NextResponse("Invalid modelId", { status: 400 });
     }
 
-    // Only allow deletion of user-owned models
-    await db
-      .delete(AIModels)
-      .where(
-        and(
-          eq(AIModels.id, parseInt(modelId)),
-          eq(AIModels.owner, userId)
-        )
-      );
+    // Check if the user already has this model as a favorite
+    const existingFavorite = await db.query.userFavoriteModels.findFirst({
+      where: and(eq(userFavoriteModels.userId, userId), eq(userFavoriteModels.modelId, modelId)),
+    });
 
-    return NextResponse.json({ message: "Model deleted successfully" });
-  } catch (error) {
-    console.error("Error deleting model:", error);
-    return NextResponse.json(
-      { error: "Failed to delete model" },
-      { status: 500 }
-    );
-  }
+    if (existingFavorite) {
+      // If it's a favorite, remove it
+      await db.delete(userFavoriteModels).where(and(eq(userFavoriteModels.userId, userId), eq(userFavoriteModels.modelId, modelId)));
+    } else {
+      // If it's not a favorite, add it
+      await db.insert(userFavoriteModels).values({ userId: userId, modelId: modelId });
+    }
+
+    // Fetch the updated list of favorite model IDs
+    const favoriteModelIdsResult = await db.select({ modelId: userFavoriteModels.modelId }).from(userFavoriteModels).where(eq(userFavoriteModels.userId, userId));
+    const favoriteModelIds = favoriteModelIdsResult.map(item => item.modelId);
+
+    return NextResponse.json({ favoriteModels: favoriteModelIds });
+    } catch (error: unknown) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      const errorStack = error instanceof Error ? error.stack : undefined;
+      console.error("[USER_MODELS_POST] userId:", userId, "modelId:", modelId, "Error:", errorMessage, "Stack:", errorStack);
+      return new NextResponse("Internal error", { status: 500 });
+    }
 }

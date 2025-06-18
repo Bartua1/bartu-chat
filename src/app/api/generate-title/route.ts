@@ -1,21 +1,18 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { getAuth } from "@clerk/nextjs/server";
 import { z } from "zod";
 import { OpenAI } from "openai";
-
-// Initialize OpenAI client
-const openai = new OpenAI({
-    baseURL: process.env.OPEN_AI_URL,
-    apiKey: process.env.OPEN_AI_API_KEY ?? "dummy", // Use proper API key from environment variables
-});
+import { db } from "~/server/db";
+import { AIModels, userAPIs } from "~/server/db/schema";
+import { eq } from "drizzle-orm";
 
 // Input validation schema
 const generateTitleSchema = z.object({
   message: z.string().min(1),
-  model: z.string().optional()
+  model: z.string().min(1) // Make model required
 });
 
-export async function POST(req: Request) {
+export async function POST(req: NextRequest) {
   try {
     // Authenticate the user
     const { userId } = getAuth(req);
@@ -24,7 +21,7 @@ export async function POST(req: Request) {
     }
 
     // Parse and validate request body
-    const body = await req.json();
+    const body = await req.json() as unknown;
     const validationResult = generateTitleSchema.safeParse(body);
     
     if (!validationResult.success) {
@@ -34,10 +31,51 @@ export async function POST(req: Request) {
       );
     }
 
-    const { message, model = "qwen2.5-7b-instruct-1m" } = validationResult.data;
+    const { message, model } = validationResult.data;
 
-    // Generate title using OpenAI
-    const response = await openai.chat.completions.create({
+    // Fetch model details from the database (same logic as chat API)
+    const aiModel = await db
+      .select()
+      .from(AIModels)
+      .where(eq(AIModels.name, model))
+      .limit(1);
+
+    if (!aiModel || aiModel.length === 0) {
+      return NextResponse.json({ error: "Model not found" }, { status: 400 });
+    }
+
+    const modelDetails = aiModel[0];
+
+    // Fetch API details from the database
+    let apiUrl: string | undefined = process.env.OPEN_AI_URL;
+    let apiKey: string | undefined = process.env.OPEN_AI_API_KEY;
+
+    if (modelDetails?.userApiId) {
+      const userApi = await db
+        .select()
+        .from(userAPIs)
+        .where(eq(userAPIs.id, modelDetails.userApiId))
+        .limit(1);
+
+      if (!userApi || userApi.length === 0) {
+        return NextResponse.json({ error: "API not found" }, { status: 400 });
+      }
+
+      apiUrl = userApi[0]?.apiUrl;
+      apiKey = userApi[0]?.apiKey;
+    }
+
+    apiUrl = apiUrl ?? "https://api.openai.com";
+    apiKey = apiKey ?? "dummy";
+
+    // Initialize OpenAI client with dynamic configuration
+    const client = new OpenAI({
+      baseURL: apiUrl,
+      apiKey: apiKey,
+    });
+
+    // Generate title using the selected model
+    const response = await client.chat.completions.create({
       model: model,
       messages: [
         {
@@ -54,18 +92,28 @@ export async function POST(req: Request) {
     });
 
     // Extract and clean the title
-    const title = response.choices[0]?.message.content?.trim() || `Chat - ${new Date().toLocaleDateString()}`;
+    let title = response.choices[0]?.message.content?.trim() ?? `Chat - ${new Date().toLocaleDateString()}`;
 
     // Remove any quotes that might be in the title
-    const cleanTitle = title.replace(/["']/g, "");
+    title = title.replace(/["']/g, "");
 
-    // If this is a thinking model (Response starts with <Think>), we need to delete whatever is inside the <Think> tag and return the rest
-    if (cleanTitle.startsWith("<Think>")) {
-      const thinkIndex = cleanTitle.indexOf("<Think>");
-      const cleanTitle = cleanTitle.slice(thinkIndex + 7).trim();
+    // If this is a thinking model (Response starts with <Think>), we need to extract content after the thinking tag
+    if (title.startsWith("<Think>")) {
+      const thinkEndIndex = title.indexOf("</Think>");
+      if (thinkEndIndex !== -1) {
+        title = title.slice(thinkEndIndex + 8).trim();
+      } else {
+        // If no closing tag, remove the opening tag
+        title = title.slice(7).trim();
+      }
     }
 
-    return NextResponse.json({ title: cleanTitle });
+    // Fallback if title is empty after processing
+    if (!title) {
+      title = `Chat - ${new Date().toLocaleDateString()}`;
+    }
+
+    return NextResponse.json({ title });
   } catch (error) {
     console.error("Error generating title:", error);
     return NextResponse.json(
